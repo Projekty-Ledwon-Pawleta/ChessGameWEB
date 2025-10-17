@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        "./ChessOnlineAPI/ChessOnlineApp/chess_engine/utils",
+        "./ChessOnlineAPI/ChessOnlineApp/chess_engine/pieces"
+    ]
+}
