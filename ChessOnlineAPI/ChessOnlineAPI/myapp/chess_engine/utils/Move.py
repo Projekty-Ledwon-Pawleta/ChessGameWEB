@@ -32,6 +32,7 @@ class Move:
         self.caught_figure = board[self.dest_x][self.dest_y]
         self.notation = str(self.start_x) + str(self.start_y) + str(self.dest_x) + str(self.dest_y)
         self.promotion = promotion
+        self.user_notation = ""
         if self.moved_figure is None:
             return
 

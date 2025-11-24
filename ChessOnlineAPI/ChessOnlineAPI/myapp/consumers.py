@@ -36,6 +36,16 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
         try:
             await self._ensure_game_exists()
             state = await self._get_state()
+            legal = await self._get_legal_moves()
+
+            if isinstance(state, dict) and "state" in state and isinstance(state["state"], dict):
+                state["state"]["legal_moves"] = legal
+                if "turn" in state:
+                    state["state"]["turn"] = state["turn"]
+            else:
+                # fallback - jeśli coś nietypowego, dodaj na najwyższym poziomie
+                state["legal_moves"] = legal
+
             await self.send_json({"type": "connected", "room": self.room_name, "state": state})
         except Exception:
             tb = traceback.format_exc()
@@ -57,29 +67,48 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
 
         t = data.get("type")
         if t == "move":
-            move = data.get("move")
-            if not move:
-                await self.send_json({"type":"error","detail":"no move provided"})
+            move_data = data.get("move")
+            if not move_data or not isinstance(move_data, dict):
+                await self.send_json({"type":"error","detail":"no move data or invalid format"})
                 return
 
-            logger.info("Move requested: %s by user=%s in room=%s", move, self.scope.get("user"), self.room_name)
+            logger.info("Move requested: %s by user=%s in room=%s", move_data, self.scope.get("user"), self.room_name)
 
             loop = asyncio.get_running_loop()
-            func = functools.partial(self._apply_move_sync, move)
+            func = functools.partial(self._apply_move_sync, move_data)
             result = await loop.run_in_executor(None, func)
 
             success, payload_or_err = result
+            success, payload_or_err = result
             if success:
-                logger.info("Move applied successfully: %s", move)
+                logger.info("Move applied successfully: %s", move_data)
                 await self.channel_layer.group_send(
                     self.group_name,
                     {"type": "broadcast_move", "move": payload_or_err}
                 )
             else:
-                logger.info("Move rejected: %s reason=%s", move, payload_or_err)
+                logger.info("Move rejected: %s reason=%s", move_data, payload_or_err)
                 await self.send_json({"type":"error","detail": payload_or_err})
+        elif t == "legal_moves":
+            try:
+                state_str = await self._get_state()
+                loop = asyncio.get_running_loop()
+                func = functools.partial(EngineWrapper.legal_moves, state_str)
+                moves = await loop.run_in_executor(None, func)
+                await self.send_json({"type":"legal_moves", "moves": moves})
+            except Exception as e:
+                tb = traceback.format_exc()
+                logger.exception("Error while getting legal moves: %s", tb)
+                await self.send_json({"type":"error","detail": f"server error: {e}"})
         elif t == "sync_request":
             state = await self._get_state()
+            legal = await self._get_legal_moves()
+            if isinstance(state, dict) and "state" in state and isinstance(state["state"], dict):
+                state["state"]["legal_moves"] = legal
+                if "turn" in state:
+                    state["state"]["turn"] = state["turn"]
+            else:
+                state["legal_moves"] = legal
             await self.send_json({"type":"sync", "state": state})
         elif t == "chat":
             msg = data.get("message", "")
@@ -95,35 +124,58 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
     async def broadcast_chat(self, event):
         await self.send_json({"type":"chat", "message": event["message"], "sender": event.get("sender")})
 
-    def _apply_move_sync(self, move_notation: str):
+    def _apply_move_sync(self, move_data: dict):
         try:
-            logger.debug("_apply_move_sync start for move=%s room=%s", move_notation, self.room_name)
+            logger.debug("_apply_move_sync start for move=%s room=%s", move_data, self.room_name)
             game, created = Game.objects.get_or_create(room_name=self.room_name)
             if created or not game.state:
                 game.state = EngineWrapper.get_initial_state()
 
-            valid, new_state, info = EngineWrapper.validate_and_apply(game.state, move_notation)
+            # --- pass JSON directly do validate_and_apply ---
+            valid, new_state, info = EngineWrapper.validate_and_apply(game.state, move_data)
             if not valid:
                 err = info.get("error") if isinstance(info, dict) else str(info)
-                logger.debug("Engine rejected move=%s error=%s", move_notation, err)
+                logger.debug("Engine rejected move=%s error=%s", move_data, err)
                 return False, err or "illegal move"
 
             game.state = new_state
-            game.append_move(move_notation)
-            game.save(update_fields=["state", "moves", "updated_at"])
+            game.save(update_fields=["state", "updated_at"])
+
+            try:
+                lm = EngineWrapper.legal_moves(new_state)
+                if lm is None:
+                    lm = []
+                elif not isinstance(lm, list):
+                    try:
+                        lm = list(lm)
+                    except Exception:
+                        lm = []
+            except Exception:
+                logger.exception("Error obtaining legal_moves after applying move %s", move_data)
+                lm = []
+
+            # preferuj get_game_turn() z managera (zwraca 'b' / 'c' w Twojej implementacji)
+            try:
+                mgr_after, _ = EngineWrapper._reconstruct_manager_from_state(new_state)
+                # używamy get_game_turn() tak jak poprosiłeś
+                payload_turn = mgr_after.get_game_turn()
+            except Exception:
+                # fallback do info jeśli jest (może zwracać inne konwencje)
+                payload_turn = info.get("turn") or None
 
             payload = {
-                "uci": info.get("uci", move_notation),
+                "uci": info.get("uci", move_data),
                 "info": info,
                 "state": json.loads(new_state),
-                "moves": game.moves.splitlines() if game.moves else []
+                "legal_moves": lm,
+                "turn": payload_turn,
             }
+            
             logger.debug("_apply_move_sync success payload=%s", payload)
             return True, payload
         except Exception as e:
             tb = traceback.format_exc()
             logger.exception("Exception in _apply_move_sync: %s", tb)
-            # write raw traceback to file as well (if you want)
             with open("chess_error_traceback.log", "a", encoding="utf-8") as f:
                 f.write(tb + "\n\n")
             return False, f"server error: {e}"
@@ -143,7 +195,72 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
         except Exception:
             logger.warning("Failed to parse game.state for room=%s", self.room_name)
             obj = {}
-        return {"state": obj, "moves": game.moves.splitlines() if game.moves else []}
+
+        # Spróbuj wywnioskować aktualną turę przez rekonstrukcję managera
+        try:
+            mgr, _ = EngineWrapper._reconstruct_manager_from_state(game.state)
+            # korzystamy z metody get_game_turn() którą dodałeś
+            turn = mgr.get_game_turn()
+        except Exception:
+            logger.exception("Failed to reconstruct manager to determine turn for room=%s", self.room_name)
+            turn = None
+
+        return {"state": obj, "turn": turn}
+    
+    @database_sync_to_async
+    def _get_state(self):
+        game = Game.objects.get(room_name=self.room_name)
+        try:
+            obj = json.loads(game.state) if game.state else {}
+        except Exception:
+            logger.warning("Failed to parse game.state for room=%s", self.room_name)
+            obj = {}
+        return {"state": obj}
 
     async def send_json(self, data):
         await self.send(text_data=json.dumps(data))
+
+    async def _get_legal_moves(self):
+        """
+        Return list of legal moves for current state as list of strings.
+        Runs EngineWrapper.legal_moves in executor to avoid blocking event loop.
+        Always returns a list (empty list on error).
+        """
+        try:
+            state_str = await self._get_state()
+            loop = asyncio.get_running_loop()
+
+            def call_engine(state_arg):
+                # EngineWrapper.legal_moves może być statyczną lub instancyjną metodą.
+                # Wywołujemy ją defensywnie, ale w większości implementacji
+                # powinno wystarczyć EngineWrapper.legal_moves(state_arg).
+                try:
+                    return EngineWrapper.legal_moves(state_arg)
+                except TypeError:
+                    # Spróbuj instancji (jeśli metoda jest instancyjna)
+                    try:
+                        inst = EngineWrapper()
+                        return inst.legal_moves(state_arg)
+                    except Exception:
+                        raise
+                except Exception:
+                    raise
+
+            moves = await loop.run_in_executor(None, functools.partial(call_engine, state_str))
+
+            # normalizacja
+            if moves is None:
+                return []
+            if isinstance(moves, list):
+                return moves
+            # jeżeli zwrócono iterator/tuple itp. -> skonwertuj do listy
+            try:
+                return list(moves)
+            except Exception:
+                logger.warning("legal_moves returned non-list and could not be coerced: %r (type=%s)", moves, type(moves))
+                return []
+        except Exception:
+            tb = traceback.format_exc()
+            logger.exception("Error computing legal moves: %s", tb)
+            return []
+

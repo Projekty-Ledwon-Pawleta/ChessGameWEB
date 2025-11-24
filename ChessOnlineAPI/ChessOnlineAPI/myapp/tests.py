@@ -13,7 +13,7 @@ async def run():
 
         # send a move in your engine's user_notation format
         # replace "e2e4" with one of legal moves returned earlier by GET (or sync)
-        await ws.send(json.dumps({"type":"move", "move":"e5"}))
+        await ws.send(json.dumps({"type":"move", "move":"e4"}))
 
         # receive broadcast for this move (and maybe other messages)
         reply = await ws.recv()
