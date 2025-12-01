@@ -36,7 +36,7 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
         try:
             await self._ensure_game_exists()
             state = await self._get_state()
-            legal = await self._get_legal_moves()
+            legal = await self._get_legal_moves(state)
 
             if isinstance(state, dict) and "state" in state and isinstance(state["state"], dict):
                 state["state"]["legal_moves"] = legal
@@ -102,7 +102,7 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
                 await self.send_json({"type":"error","detail": f"server error: {e}"})
         elif t == "sync_request":
             state = await self._get_state()
-            legal = await self._get_legal_moves()
+            legal = await self._get_legal_moves(state)
             if isinstance(state, dict) and "state" in state and isinstance(state["state"], dict):
                 state["state"]["legal_moves"] = legal
                 if "turn" in state:
@@ -206,59 +206,17 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             turn = None
 
         return {"state": obj, "turn": turn}
-    
-    @database_sync_to_async
-    def _get_state(self):
-        game = Game.objects.get(room_name=self.room_name)
-        try:
-            obj = json.loads(game.state) if game.state else {}
-        except Exception:
-            logger.warning("Failed to parse game.state for room=%s", self.room_name)
-            obj = {}
-        return {"state": obj}
 
     async def send_json(self, data):
         await self.send(text_data=json.dumps(data))
 
-    async def _get_legal_moves(self):
-        """
-        Return list of legal moves for current state as list of strings.
-        Runs EngineWrapper.legal_moves in executor to avoid blocking event loop.
-        Always returns a list (empty list on error).
-        """
+    async def _get_legal_moves(self, state_str):
         try:
-            state_str = await self._get_state()
-            loop = asyncio.get_running_loop()
-
-            def call_engine(state_arg):
-                # EngineWrapper.legal_moves może być statyczną lub instancyjną metodą.
-                # Wywołujemy ją defensywnie, ale w większości implementacji
-                # powinno wystarczyć EngineWrapper.legal_moves(state_arg).
-                try:
-                    return EngineWrapper.legal_moves(state_arg)
-                except TypeError:
-                    # Spróbuj instancji (jeśli metoda jest instancyjna)
-                    try:
-                        inst = EngineWrapper()
-                        return inst.legal_moves(state_arg)
-                    except Exception:
-                        raise
-                except Exception:
-                    raise
-
-            moves = await loop.run_in_executor(None, functools.partial(call_engine, state_str))
-
-            # normalizacja
+            moves = EngineWrapper.legal_moves(state_str)
             if moves is None:
                 return []
-            if isinstance(moves, list):
-                return moves
-            # jeżeli zwrócono iterator/tuple itp. -> skonwertuj do listy
-            try:
-                return list(moves)
-            except Exception:
-                logger.warning("legal_moves returned non-list and could not be coerced: %r (type=%s)", moves, type(moves))
-                return []
+            
+            return moves
         except Exception:
             tb = traceback.format_exc()
             logger.exception("Error computing legal moves: %s", tb)

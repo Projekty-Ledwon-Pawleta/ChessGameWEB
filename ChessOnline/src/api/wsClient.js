@@ -25,12 +25,6 @@ class WSClient {
     const url = this.buildUrl(this.room);
     this.ws = new WebSocket(url);
 
-    this.ws.onopen = () => {
-      this.connected = true;
-      this.emit('open');
-      this.send({ type: 'sync_request' });
-    };
-
     this.ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch (e) { this.emit('malformed', ev.data); return; }

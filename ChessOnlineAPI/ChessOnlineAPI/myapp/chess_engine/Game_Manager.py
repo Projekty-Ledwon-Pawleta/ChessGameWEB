@@ -1,22 +1,26 @@
 from .Engine import Board
-from .utils.Move import Move
 
 class ChessGameManager:
     def __init__(self):
         self.board = Board()
 
     def get_possible_moves(self):
+        return self.board.update_moves()
+    
+    def get_possible_move_notations(self):
         possible_moves = self.board.update_moves()
         return [move.user_notation for move in possible_moves]
 
-    def make_move(self, move_notation):
+    def make_move(self, move_notation, promotion_type=None):
         possible_moves = self.board.update_moves()
-
-        print("possible moves:", possible_moves)
-
+        
         for move in possible_moves:
             if move.user_notation == move_notation:
                 self.board.make_move(move)
+                
+                if promotion_type:
+                    self.promote_pawn(promotion_type)
+
                 return True
         return False
 

@@ -66,7 +66,7 @@ class EngineWrapper:
             except Exception:
                 # corrupted or unparsable -> return fresh manager
                 return mgr, []
-              
+
         for m in moves:
             try:
                 ok = mgr.make_move(m)
@@ -105,7 +105,7 @@ class EngineWrapper:
 
             fr = move_data.get("from")
             to = move_data.get("to")
-            promo = move_data.get("promo", "H") 
+            promo = move_data.get("promo") 
 
             if not fr or not to:
                 return False, serialized_state, {"error": "missing from/to coordinates"}
@@ -124,7 +124,10 @@ class EngineWrapper:
 
             check_if_castling(mgr, move_obj, start_row, start_col, dest_row, dest_col)
 
-            ok = mgr.make_move(move_obj.user_notation)
+            resolved = check_if_conflict_notations(mgr, move_obj, legal)
+            move_obj.user_notation = resolved
+
+            ok = mgr.make_move(move_obj.user_notation, promo)
             if not ok:
                 return False, serialized_state, {"error": "engine refused move"}
 
@@ -145,7 +148,7 @@ class EngineWrapper:
     @staticmethod
     def legal_moves(serialized_state: str) -> List[str]:
         mgr, _ = EngineWrapper._reconstruct_manager_from_state(serialized_state)
-        return mgr.get_possible_moves()
+        return mgr.get_possible_move_notations()
     
     @staticmethod
     def _is_uci_coord(s: str) -> bool:
@@ -191,3 +194,112 @@ def check_if_castling(mgr: ChessGameManager, move_obj: Move, start_row: int, sta
                 move_obj.user_notation = "0-0"   # królewska
             else:
                 move_obj.user_notation = "0-0-0" # hetmańska
+
+def check_if_conflict_notations(mgr: ChessGameManager, move_obj: Move, legal_moves: list) -> str:
+    """
+    legal_moves: lista obiektów Move (lub ewentualnie listę notacji — funkcja obsłuży obie opcje)
+    Zwraca poprawioną notację dla move_obj (dodaje disambiguator jeśli potrzeba).
+    """
+    base = move_obj.user_notation
+
+    if move_obj is None or getattr(move_obj, 'moved_figure', None) is None:
+        return base
+    # pomijamy pionki i roszady
+    if move_obj.moved_figure.name == 'Pionek':
+        return base
+    if base in ('0-0', '0-0-0', 'O-O', 'O-O-O'):
+        return base
+
+    piece_letter = base[0]
+    has_capture = 'x' in base
+
+    # konwersja współrzędnych dest -> notacja (np. (dest_y,dest_x) -> 'e5')
+    def dest_to_square(dest_x, dest_y):
+        # dest_x = row index (0..7), dest_y = col index (0..7)
+        try:
+            file_letter = Move.dictionary[dest_y + 1]
+        except Exception:
+            file_letter = chr(ord('a') + dest_y)
+        rank = str(8 - dest_x)
+        return file_letter + rank
+
+    target_square = dest_to_square(move_obj.dest_x, move_obj.dest_y)
+
+    # Zbuduj listę konkurentów: inne ruchy z legal_moves prowadzące na to samo pole,
+    # tej samej klasy/typu i tego samego koloru (pomijamy nasz move_obj)
+    competitors = []
+    for m in legal_moves:
+        # jeśli legal_moves są notacjami (str) — pominąć
+        if not hasattr(m, 'dest_x'):
+            continue
+        # pomiń ten sam ruch
+        if m.start_x == move_obj.start_x and m.start_y == move_obj.start_y and m.dest_x == move_obj.dest_x and m.dest_y == move_obj.dest_y:
+            continue
+        # musi prowadzić na to samo pole docelowe
+        if m.dest_x != move_obj.dest_x or m.dest_y != move_obj.dest_y:
+            continue
+        # musi być ten sam typ figury (po klasie lub po .name)
+        same_class = m.moved_figure.__class__.__name__ == move_obj.moved_figure.__class__.__name__
+        same_name = getattr(m.moved_figure, 'name', None) == getattr(move_obj.moved_figure, 'name', None)
+        if not (same_class or same_name):
+            continue
+        # musi być ten sam kolor (używamy koloru ruszanej figury)
+        moved_color = getattr(move_obj.moved_figure, 'color', None)
+        m_color = getattr(m.moved_figure, 'color', None)
+        if moved_color is not None and m_color is not None and moved_color != m_color:
+            continue
+        # to jest konkurent
+        competitors.append(m)
+
+    # jeśli brak konkurentów -> nie trzeba disambiguatora
+    if not competitors:
+        return base
+
+    # helpery do tworzenia disambiguatorów i notacji
+    def col_to_file_letter(col_idx: int) -> str:
+        try:
+            return Move.dictionary[col_idx + 1]
+        except Exception:
+            return chr(ord('a') + col_idx)
+
+    def row_idx_to_rank_number(row_idx: int) -> str:
+        return str(8 - row_idx)
+
+    def make_notation(piece_letter, disamb, has_x, target):
+        return piece_letter + disamb + ('x' if has_x else '') + target
+
+    # nasze disambiguatory (dla move_obj)
+    my_file = col_to_file_letter(move_obj.start_y)
+    my_rank = row_idx_to_rank_number(move_obj.start_x)
+    my_both = my_file + my_rank
+
+    # konstrukcja notacji konkurentów przy różnych wyborach disambiguatora
+    def competitor_notation_with_choice(comp_move, choice):
+        # choice: 'file'|'rank'|'both'|'' (none)
+        if choice == 'file':
+            d = col_to_file_letter(comp_move.start_y)
+        elif choice == 'rank':
+            d = row_idx_to_rank_number(comp_move.start_x)
+        elif choice == 'both':
+            d = col_to_file_letter(comp_move.start_y) + row_idx_to_rank_number(comp_move.start_x)
+        else:
+            d = ''
+        # capture dla konkurenta sprawdzamy po jego user_notation (może być lepiej: check jeśli caught_figure != None)
+        comp_has_x = 'x' in getattr(comp_move, 'user_notation', '')
+        return make_notation(piece_letter, d, comp_has_x, dest_to_square(comp_move.dest_x, comp_move.dest_y))
+
+    # spróbuj file
+    my_not_file = make_notation(piece_letter, my_file, has_capture, target_square)
+    competitor_file_notations = {competitor_notation_with_choice(c, 'file') for c in competitors}
+    if my_not_file not in competitor_file_notations:
+        return my_not_file
+
+    # spróbuj rank
+    my_not_rank = make_notation(piece_letter, my_rank, has_capture, target_square)
+    competitor_rank_notations = {competitor_notation_with_choice(c, 'rank') for c in competitors}
+    if my_not_rank not in competitor_rank_notations:
+        return my_not_rank
+
+    # w ostateczności użyj obu (file+rank)
+    my_not_both = make_notation(piece_letter, my_both, has_capture, target_square)
+    return my_not_both

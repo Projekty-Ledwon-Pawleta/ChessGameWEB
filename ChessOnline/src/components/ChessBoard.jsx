@@ -1,5 +1,5 @@
 // src/components/ChessBoard.jsx
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import pieceMap from './pieceMap';
 import * as chessValidator from './validate_moves.js';
 import wsClient from '../api/wsClient';
@@ -14,6 +14,44 @@ function prettySquareName(row, col) {
   const ranks = '87654321';
   return `${files[col]}${ranks[row]}`;
 }
+
+function isPromotionMove(selectedPiece, sr, sc, r, c) {
+  if (!selectedPiece) return false;
+  const canon = chessValidator.canonicalPieceType(chessValidator.pieceTypeFromCell(selectedPiece, sr));
+  if (canon !== 'pawn') return false;
+  const color = chessValidator.colorOfPieceAt(selectedPiece, sr); // 'b' | 'c'
+  // white ('b') promotes on row 0; black ('c') promotes on row 7
+  if (color === 'b' && r === 0) return true;
+  if (color === 'c' && r === 7) return true;
+  return false;
+}
+
+function openPromotionChooser(from, to, targetSquareElement, selectedPiece) {
+  // compute absolute position of targetSquareElement (relative to document)
+  if (targetSquareElement && boardRef.current) {
+    const rect = targetSquareElement.getBoundingClientRect();
+    setPromotionPos({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+  } else {
+    setPromotionPos(null);
+  }
+  setPromotionMove({ from, to, piece: selectedPiece });
+}
+
+function closePromotionChooser() {
+  setPromotionMove(null);
+  setPromotionPos(null);
+}
+
+function sendMoveWithPromo(from, to, promo) {
+    wsClient.send({
+      type: 'move',
+      move: {
+        from,
+        to,
+        promo: promo || ''
+      }
+    });
+  }
 
 function sanForMove(cellValue, sr, sc, r, c, board) {
   const dest = prettySquareName(r, c);
@@ -98,6 +136,10 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
 
   // nowe: lista legalnych ruchów w notacji serwera (np. ["e5","Sa3","Ke2"...])
   const [legalMoves, setLegalMoves] = useState([]);
+  const [promotionMove, setPromotionMove] = useState(null);
+  // popup position {left, top, width, height} w px względnie względem całego dokumentu
+  const [promotionPos, setPromotionPos] = useState(null);
+  const boardRef = useRef(null);
 
   useEffect(() => {
     // Podłącz się automatycznie do serwera przy mount
@@ -202,7 +244,7 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
   }
 
   return destinations;
-}, [selected, legalMoves, board, turn]);
+  }, [selected, legalMoves, board, turn]);
 
 
   function onSquareClick(r, c) {
@@ -264,25 +306,37 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
         }
 
         // finally check if any variant is in legalSet
-        const allowed = variants.some(v => legalSet.has(v));
+        const legalArray = [...legalSet]; // zamieniamy Set na tablicę
 
-        if (!allowed) {
-          console.warn('Attempted illegal move (blocked on client):', san, 'coords:', moveStrCoords, 'legal moves:', legalMoves);
-          setSelected(null);
+        const allowed = variants.some(v =>
+          legalArray.some(legal => legal.includes(v))
+        );
+
+        // if (!allowed) {
+        //   console.warn('Attempted illegal move (blocked on client):', san, 'coords:', moveStrCoords, 'legal moves:', legalMoves);
+        //   setSelected(null);
+        //   return;
+        // }
+
+        if (isPromotionMove(selectedPiece, sr, sc, r, c)) {
+          // znajdź element docelowego pola żeby ustawić popup nad nim
+          const boardEl = boardRef.current;
+          if (boardEl) {
+            // pola są renderowane w stałej siatce: grid dzieci boardEl.children
+            // znajdujemy dzieci boardEl i odpowiednie child index = r*8 + c
+            const idx = r * 8 + c;
+            const child = boardEl.children[idx];
+            openPromotionChooser({ r: sr, c: sc }, { r, c }, child, selectedPiece);
+          } else {
+            // fallback: jeśli nie możemy policzyć pozycji, po prostu ustaw promotionMove bez pozycji
+            setPromotionMove({ from: { r: sr, c: sc }, to: { r, c }, piece: selectedPiece });
+          }
+          // nie resetujemy selekcji tu — popup obsłuży reset
           return;
         }
 
-        // === TUTAJ ZMIANA: wysyłamy JSON z indeksami a nie SAN ===
-        // format: { type: 'move', move: { from: { r, c }, to: { r, c }, promo: 'H' } }
-        // promo ustawione domyślnie na 'H' (hetman). Zmienisz to później gdy obsłużysz wybór promocji.
-        wsClient.send({
-          type: 'move',
-          move: {
-            from: { r: sr, c: sc },
-            to:   { r: r,  c: c },
-            promo: 'H'
-          }
-        });
+        // zwykły ruch: wysyłamy promo: ''
+        sendMoveWithPromo({ r: sr, c: sc }, { r, c }, '');
 
         // resetujemy zaznaczenie i czekamy na update z serwera
         setSelected(null);
@@ -305,9 +359,39 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
     }
   }
 
+  function handlePromotionChoice(choice) {
+    if (!promotionMove) return;
+    const { from, to } = promotionMove;
+    sendMoveWithPromo(from, to, choice);
+    closePromotionChooser();
+    setSelected(null);
+  }
+
+  // kliknięcie poza popup -> anuluj
+  useEffect(() => {
+    function onDocClick(e) {
+      if (!promotionMove) return;
+      const popup = document.getElementById('promotion-popup');
+      if (!popup) return;
+      if (!popup.contains(e.target)) {
+        // kliknięto poza popup -> anuluj
+        closePromotionChooser();
+      }
+    }
+    if (promotionMove) {
+      document.addEventListener('mousedown', onDocClick);
+      const onKey = (ev) => { if (ev.key === 'Escape') closePromotionChooser(); };
+      document.addEventListener('keydown', onKey);
+      return () => {
+        document.removeEventListener('mousedown', onDocClick);
+        document.removeEventListener('keydown', onKey);
+      };
+    }
+  }, [promotionMove]);
+
   // render planszy
   return (
-    <div style={{ padding: 12 }}>
+    <div style={{ padding: 12, position: 'relative' }}>
       <div style={{ marginBottom: 8, display: 'flex', gap: 12, alignItems: 'center' }}>
         <div style={{ fontWeight: 600 }}>ChessBoard (serwer-driven)</div>
         <div style={{ padding: '4px 8px', borderRadius: 6, background: connected ? '#d1fae5' : '#fee2e2', color: connected ? '#064e3b' : '#991b1b' }}>
@@ -316,7 +400,10 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
         {turn ? <div>Aktualna tura: <strong style={{ marginLeft: 6 }}>{turn === 'b' ? 'Białe' : 'Czarne'}</strong></div> : null}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', border: '2px solid #444' }}>
+      <div
+        ref={boardRef}
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', border: '2px solid #444' }}
+      >
         {board.map((rowArr, r) =>
           rowArr.map((cell, c) => {
             const isLight = (r + c) % 2 === 0;
@@ -327,13 +414,10 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
             const pieceKey = piece ? chessValidator.normalizedPieceKey(piece, r) : null;
             const imgSrc = pieceKey ? pieceMap[pieceKey] : null;
             if (piece && !imgSrc) {
-              // helpful debug output when an expected image is missing
-              // (keeps behavior non-breaking in production)
               // eslint-disable-next-line no-console
               console.warn('Missing piece image for key:', pieceKey, 'piece value:', piece);
             }
 
-            // NOWE: podświetl destynacje legalne (gdy figura jest zaznaczona)
             const isLegalDest = (() => {
               if (!selected) return false;
               const dest = prettySquareName(r, c);
@@ -344,60 +428,41 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
               <div
                 key={key}
                 onClick={() => {
-                  const destPiece = piece; // figura na polu docelowym (może być null)
-                  const destColor = chessValidator.colorOfPieceAt(destPiece, r); // 'b' | 'c' | null
+                  const destPiece = piece;
+                  const destColor = chessValidator.colorOfPieceAt(destPiece, r);
 
-                  // Znormalizuj turn do tej samej konwencji co colorOfPieceAt:
-                  // Twoja konwencja frontu była: turn === 'b' -> tura białego, turn === 'w' -> tura czarnego
-                  // colorOfPieceAt zwraca 'b' (biały) i 'c' (czarny)
                   const normTurn = turn === 'b' ? 'b' : turn === 'w' ? 'c' : turn;
 
-                  // aktualnie zaznaczone pole (jeśli istnieje)
                   const sel = selected;
                   const selPiece = sel ? (board?.[sel.r] && board[sel.r][sel.c]) : null;
                   const selColor = selPiece ? chessValidator.colorOfPieceAt(selPiece, sel.r) : null;
 
-                  // jeśli kliknięto to samo pole co było zaznaczone -> odznacz
                   if (sel && sel.r === r && sel.c === c) {
-                    // jeśli chcesz, żeby drugi klik odznaczał:
-                    onSquareClick(r, c); // zakładam, że onSquareClick obsługuje toggle selection
+                    onSquareClick(r, c);
                     return;
                   }
 
-                  // jeśli nie ma zaznaczenia:
                   if (!sel) {
-                    // - pusty kwadrat: pozwól (może to być używane do de/select w twojej logice)
-                    // - własna figura: pozwól wybrać
-                    // - figura przeciwnika: nie pozwalaj (nie wybieramy figur przeciwnika)
                     if (!destPiece || destColor === normTurn) {
                       onSquareClick(r, c);
                     }
                     return;
                   }
 
-                  // jeśli mamy zaznaczoną figurę:
-                  // - jeśli kliknięto własną figurę -> zmiana wyboru
                   if (destPiece && destColor === normTurn) {
                     onSquareClick(r, c);
                     return;
                   }
 
-                  // - jeśli kliknięto pole puste -> wykonaj ruch na puste pole
                   if (!destPiece) {
                     onSquareClick(r, c);
                     return;
                   }
 
-                  // - jeśli kliknięto figurę przeciwnika -> dozwolone tylko jeżeli zaznaczona figura należy do gracza
-                  //   czyli selected piece color musi być równy normTurn
                   if (selColor === normTurn) {
-                    // to jest przechwycenie (capture) — wyślij ruch
                     onSquareClick(r, c);
                     return;
                   }
-
-                  // inaczej (np. zazniona figura nie należy do gracza) -> ignoruj klik
-                  // (opcjonalnie można dodać feedback/tooltip)
                 }}
                 title={prettySquareName(r, c)}
                 style={{
@@ -407,7 +472,7 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  background: isLegalDest ? '#facc15' : bg, // żółte podświetlenie legalnego pola
+                  background: isLegalDest ? '#facc15' : bg,
                   border: selectedHere ? '3px solid gold' : '1px solid #999',
                   cursor: piece ? 'pointer' : 'pointer',
                 }}
@@ -416,7 +481,6 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
                   imgSrc ? (
                     <img src={imgSrc} alt={piece} style={{ width: 40, height: 40, objectFit: 'contain', pointerEvents: 'none' }} />
                   ) : (
-                    // fallback visible marker when image not available
                     <div style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontWeight: 700 }}>{piece[0] || '?'}</div>
                   )
                 ) : null}
@@ -425,6 +489,37 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
           })
         )}
       </div>
+
+      {/* Promotion chooser popup */}
+      {promotionMove && (
+        <div
+          id="promotion-popup"
+          style={{
+            position: 'absolute',
+            // jeśli mamy wyliczoną pozycję pola — wycentruj popup nad polem; inaczej centrum planszy
+            left: promotionPos ? promotionPos.left + (promotionPos.width / 2) - 90 : '50%',
+            top: promotionPos ? promotionPos.top + (promotionPos.height / 2) - 28 : '50%',
+            transform: promotionPos ? 'none' : 'translate(-50%,-50%)',
+            zIndex: 9999,
+            padding: 6,
+            background: '#fff',
+            border: '1px solid #444',
+            borderRadius: 8,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
+            display: 'flex',
+            gap: 6,
+            alignItems: 'center'
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, marginRight: 6 }}>Promocja:</div>
+          {/* H - hetman, S - skoczek, G - goniec, W - wieża */}
+          <button onClick={() => handlePromotionChoice('H')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>H</button>
+          <button onClick={() => handlePromotionChoice('S')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>S</button>
+          <button onClick={() => handlePromotionChoice('G')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>G</button>
+          <button onClick={() => handlePromotionChoice('W')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>W</button>
+          <button onClick={() => closePromotionChooser()} style={{ marginLeft: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer' }}>Anuluj</button>
+        </div>
+      )}
     </div>
   );
 }

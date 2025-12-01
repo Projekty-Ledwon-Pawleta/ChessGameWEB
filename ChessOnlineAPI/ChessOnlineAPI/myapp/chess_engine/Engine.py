@@ -61,7 +61,6 @@ class Board:
 
             if self.if_check(color):
                 moves.remove(moves[move])
-                self.szach = True
 
             if self.white_to_move:
                 self.white_to_move = False
@@ -84,12 +83,21 @@ class Board:
         for i in range(len(moves)):
             for j in range(i + 1, len(moves)):
                 if moves[i].user_notation == moves[j].user_notation and moves[i].moved_figure.name != 'Pionek':
+                    piece_letter = moves[i].user_notation[0]
+
+                    # jeśli mają tę samą kolumnę -> rozróżniamy RZĘDEM (liczbą)
                     if moves[i].start_y == moves[j].start_y:
-                        moves[i].user_notation = moves[i].user_notation[:1] + str(8 - moves[i].start_x) + moves[i].user_notation[1:]
-                        moves[j].user_notation = moves[j].user_notation[:1] + str(8 - moves[i].start_x) + moves[j].user_notation[1:]
+                        moves[i].user_notation = piece_letter + str(8 - moves[i].start_x) + moves[i].user_notation[1:]
+                        moves[j].user_notation = piece_letter + str(8 - moves[j].start_x) + moves[j].user_notation[1:]
+                    # jeśli mają ten sam rząd -> rozróżniamy KOLUMNĄ (literą)
+                    elif moves[i].start_x == moves[j].start_x:
+                        moves[i].user_notation = piece_letter + moves[i].dictionary[moves[i].start_y + 1] + moves[i].user_notation[1:]
+                        moves[j].user_notation = piece_letter + moves[j].dictionary[moves[j].start_y + 1] + moves[j].user_notation[1:]
                     else:
-                        moves[i].user_notation = moves[i].user_notation[:1] + str(moves[i].dictionary[moves[i].start_y + 1]) + moves[i].user_notation[1:]
-                        moves[j].user_notation = moves[j].user_notation[:1] + str(moves[j].dictionary[moves[j].start_y + 1]) + moves[j].user_notation[1:]
+                        # różne rzędy i kolumny - wystarczy podać KOLUMNĘ (file) dla każdego
+                        moves[i].user_notation = piece_letter + moves[i].dictionary[moves[i].start_y + 1] + moves[i].user_notation[1:]
+                        moves[j].user_notation = piece_letter + moves[j].dictionary[moves[j].start_y + 1] + moves[j].user_notation[1:]
+
         return moves
 
     def check_if_castling_possible(self, move):
@@ -127,27 +135,26 @@ class Board:
 
 
     def if_field_under_attack(self, r, c):
-        self.white_to_move = not self.white_to_move
-        opponent_moves = self.generate_moves()
-        self.white_to_move = not self.white_to_move
+
+        original = self.white_to_move
+        try:
+            self.white_to_move = not original
+            opponent_moves = self.generate_moves()
+        finally:
+            self.white_to_move = original
+
         for move in opponent_moves:
             if move.dest_x == r and move.dest_y == c:
                 return True
-
         return False
     
     def if_check(self, color):
-        if self.white_to_move:
-            self.white_to_move = False
-        else:
-            self.white_to_move = True
-
-        opponent_moves = self.generate_moves()
-
-        if self.white_to_move:
-            self.white_to_move = False
-        else:
-            self.white_to_move = True
+        original = self.white_to_move
+        try:
+            self.white_to_move = not original
+            opponent_moves = self.generate_moves()
+        finally:
+            self.white_to_move = original
 
         for move in opponent_moves:
             if color == 'Bialy' and move.dest_x == self.white_king_pos[0] and move.dest_y == self.white_king_pos[1]:
