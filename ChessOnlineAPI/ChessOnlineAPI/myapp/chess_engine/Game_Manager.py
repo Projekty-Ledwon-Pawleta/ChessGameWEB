@@ -26,8 +26,10 @@ class ChessGameManager:
 
     def get_board_state(self):
         data = [[piece.color[0].lower() + piece.name if piece else None for piece in row] for row in self.board.board]
-        print(data)
         return data
+    
+    def get_board_castling_rules(self):
+         return self.board.castling_move.serialize()
 
     def is_checkmate(self):
         return self.board.checkmate

@@ -3,6 +3,14 @@ import json
 import re
 from typing import Tuple, Dict, Any, List
 
+from myapp.chess_engine.Engine import Board
+from myapp.chess_engine.pieces.Pawn import Pawn
+from myapp.chess_engine.pieces.Queen import Queen
+from myapp.chess_engine.pieces.Bishop import Bishop
+from myapp.chess_engine.pieces.King import King
+from myapp.chess_engine.pieces.Knight import Knight
+from myapp.chess_engine.pieces.Rook import Rook
+from myapp.chess_engine.utils.Castling import CastlingRules
 from myapp.chess_engine.utils.Move import Move
 
 # Adjust import path to where you put your ChessGameManager
@@ -25,7 +33,8 @@ class EngineWrapper:
             "board": mgr.get_board_state(),
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
-            "turn": mgr.get_game_turn()
+            "turn": mgr.get_game_turn(),
+            "castling": mgr.get_board_castling_rules()
         }
 
     @staticmethod
@@ -35,45 +44,117 @@ class EngineWrapper:
 
     @staticmethod
     def _reconstruct_manager_from_state(state_json: str) -> Tuple[ChessGameManager, List[str]]:
-        """
-        Load JSON state, create ChessGameManager and replay moves from state["moves"].
-        Returns (manager, moves_list)
-        """
         mgr = ChessGameManager()
         if not state_json:
             return mgr, []
 
-        moves = []
-
-        # Jeśli dostaliśmy dict już zdeserializowany — użyj go bez parsowania
         if isinstance(state_json, dict):
             obj = state_json
-            moves = obj.get("state", {}).get("moves", []) if isinstance(obj, dict) else []  
         else:
-            # dopuszczalne typy wejścia: str, bytes, bytearray
             if isinstance(state_json, (bytes, bytearray)):
                 try:
                     state_text = state_json.decode("utf-8")
                 except Exception:
-                    # niepoprawne bajty -> zwracamy świeżego managera
                     return mgr, []
             else:
                 state_text = state_json
-
             try:
                 obj = json.loads(state_text)
-                moves = obj.get("moves", []) if isinstance(obj, dict) else []  
             except Exception:
-                # corrupted or unparsable -> return fresh manager
                 return mgr, []
 
-        for m in moves:
-            try:
-                ok = mgr.make_move(m)
-            except Exception:
-                pass
+        moves = obj.get("moves", []) if isinstance(obj, dict) else []
 
+        board_data = obj.get("board", None)
+
+        def _make_piece_from_token(token: str, r: int, c: int):
+            if token is None:
+                return None
+            if not isinstance(token, str) or len(token) < 2:
+                return None
+            color_char = token[0]  # 'b' or 'c'
+            name = token[1:]       # e.g. "Pionek", "Wieza", ...
+            color = "Bialy" if color_char == "b" else "Czarny"
+
+            # Tworzymy obiekt figury z odpowiadającymi parametrami (r, c)
+            if name == "Pionek":
+                return Pawn(color, r, c)
+            if name == "Wieza":
+                return Rook(color, r, c)
+            if name == "Skoczek":
+                return Knight(color, r, c)
+            if name == "Goniec":
+                return Bishop(color, r, c)
+            if name == "Krol":
+                return King(color, r, c)
+            if name == "Hetman":
+                return Queen(color, r, c)
+            return None
+        
+        # Jeżeli jest board -> zbuduj planszę bez replayowania ruchów
+        if board_data and isinstance(board_data, list):
+            b = Board()
+
+            # zainicjuj pustą 8x8 planszę
+            new_board = [[None for _ in range(8)] for _ in range(8)]
+            white_king_pos = None
+            black_king_pos = None
+
+            for r in range(min(8, len(board_data))):
+                row = board_data[r]
+                if not isinstance(row, list):
+                    continue
+                for c in range(min(8, len(row))):
+                    token = row[c]
+                    piece = _make_piece_from_token(token, r, c)
+                    new_board[r][c] = piece
+                    if piece is not None and getattr(piece, "name", None) == "Krol":
+                        if piece.color == "Bialy":
+                            white_king_pos = (r, c)
+                        else:
+                            black_king_pos = (r, c)
+
+            b.board = new_board
+            b.move_history = []  # nie odtwarzamy historii ruchów tutaj
+
+            # ustawienie turn (white_to_move). JSON używa "b" dla białych, "c" dla czarnych
+            turn = obj.get("turn", None)
+            if turn == "b":
+                b.white_to_move = True
+            elif turn == "c":
+                b.white_to_move = False
+            else:
+                # fallback: jeżeli liczba ruchów parzysta -> biały do ruchu
+                b.white_to_move = (len(moves) % 2 == 0)
+
+            # Pozycje królów (fallback do domyślnych jeśli nie znalezione)
+            if white_king_pos:
+                b.white_king_pos = white_king_pos
+            if black_king_pos:
+                b.black_king_pos = black_king_pos
+
+            # checkmate / stalemate
+            if "checkmate" in obj:
+                b.checkmate = bool(obj.get("checkmate"))
+            if "stalemate" in obj:
+                b.stalemate = bool(obj.get("stalemate"))
+
+            # castling: odczytamy obiekt (dict) jeśli jest
+            cm = obj.get("castling", None)
+            if cm and isinstance(cm, dict):
+                # CastlingRules(cH, cK, bH, bK) - dostosuj kolejność jeśli Twoja klasa inna
+                b.castling_move = CastlingRules(
+                    bool(cm.get("cH", False)),
+                    bool(cm.get("cK", False)),
+                    bool(cm.get("bH", False)),
+                    bool(cm.get("bK", False))
+                )       
+            mgr.board = b
+
+            return mgr, moves
+        
         return mgr, moves
+
 
     @staticmethod
     def serialize_manager_state(mgr: ChessGameManager, moves: List[str]) -> str:
@@ -82,7 +163,8 @@ class EngineWrapper:
             "board": mgr.get_board_state(),
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
-            "turn": mgr.get_game_turn()
+            "turn": mgr.get_game_turn(),
+            "castling": mgr.get_board_castling_rules()
         }
         return json.dumps(state)
 
@@ -139,7 +221,8 @@ class EngineWrapper:
                 "board": mgr.get_board_state(),
                 "checkmate": mgr.is_checkmate(),
                 "stalemate": mgr.is_stalemate(),
-                "turn": mgr.get_game_turn()
+                "turn": mgr.get_game_turn(),
+                "castling": mgr.get_board_castling_rules()
             }
             return True, new_state, info
         except Exception as e:
