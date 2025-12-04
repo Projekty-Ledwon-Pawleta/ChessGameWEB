@@ -65,7 +65,12 @@ class EngineWrapper:
 
         moves = obj.get("moves", []) if isinstance(obj, dict) else []
 
+        if not moves:
+            moves = obj.get("state").get("moves", []) if "state" in obj else moves
+
         board_data = obj.get("board", None)
+        if not board_data:
+            board_data = obj.get("state").get("board", None) if "state" in obj else None
 
         def _make_piece_from_token(token: str, r: int, c: int):
             if token is None:
@@ -134,13 +139,13 @@ class EngineWrapper:
                 b.black_king_pos = black_king_pos
 
             # checkmate / stalemate
-            if "checkmate" in obj:
-                b.checkmate = bool(obj.get("checkmate"))
-            if "stalemate" in obj:
-                b.stalemate = bool(obj.get("stalemate"))
+            
+            b.checkmate = bool(obj.get("checkmate")) or bool(obj.get("state", {}).get("checkmate"))
+            b.stalemate = bool(obj.get("stalemate")) or bool(obj.get("state", {}).get("stalemate"))
 
-            # castling: odczytamy obiekt (dict) jeśli jest
-            cm = obj.get("castling", None)
+            # castling: odczytamy obiekt jeśli jest, inaczej None
+            cm = obj.get("castling") or obj.get("state", {}).get("castling")
+
             if cm and isinstance(cm, dict):
                 # CastlingRules(cH, cK, bH, bK) - dostosuj kolejność jeśli Twoja klasa inna
                 b.castling_move = CastlingRules(

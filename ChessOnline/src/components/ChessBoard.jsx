@@ -26,17 +26,6 @@ function isPromotionMove(selectedPiece, sr, sc, r, c) {
   return false;
 }
 
-function openPromotionChooser(from, to, targetSquareElement, selectedPiece) {
-  // compute absolute position of targetSquareElement (relative to document)
-  if (targetSquareElement && boardRef.current) {
-    const rect = targetSquareElement.getBoundingClientRect();
-    setPromotionPos({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
-  } else {
-    setPromotionPos(null);
-  }
-  setPromotionMove({ from, to, piece: selectedPiece });
-}
-
 function closePromotionChooser() {
   setPromotionMove(null);
   setPromotionPos(null);
@@ -522,4 +511,15 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
       )}
     </div>
   );
+
+  function openPromotionChooser(from, to, targetSquareElement, selectedPiece) {
+    // compute absolute position of targetSquareElement (relative to document)
+    if (targetSquareElement && boardRef.current) {
+      const rect = targetSquareElement.getBoundingClientRect();
+      setPromotionPos({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    } else {
+      setPromotionPos(null);
+    }
+    setPromotionMove({ from, to, piece: selectedPiece });
+  }
 }
