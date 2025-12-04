@@ -226,22 +226,22 @@ class Board:
 
         if(promotion_type == 'H'):
             last_move.user_notation += 'H'
-            self.board[pawn.row][pawn.column] = Queen(color, pawn.row, pawn.column, self.images[color[0].lower() + "Hetman"])
+            self.board[pawn.row][pawn.column] = Queen(color, pawn.row, pawn.column)
             return
         
         if(promotion_type == 'W'):
             last_move.user_notation += 'W'
-            self.board[pawn.row][pawn.column] = Rook(color, pawn.row, pawn.column, self.images[color[0].lower() + "Wieza"])
+            self.board[pawn.row][pawn.column] = Rook(color, pawn.row, pawn.column)
             return
         
         if(promotion_type == 'S'):
             last_move.user_notation += 'S'
-            self.board[pawn.row][pawn.column] = Knight(color, pawn.row, pawn.column, self.images[color[0].lower() + "Skoczek"])
+            self.board[pawn.row][pawn.column] = Knight(color, pawn.row, pawn.column)
             return
         
         if(promotion_type == 'G'):
             last_move.user_notation += 'G'
-            self.board[pawn.row][pawn.column] = Bishop(color, pawn.row, pawn.column, self.images[color[0].lower() + "Goniec"])
+            self.board[pawn.row][pawn.column] = Bishop(color, pawn.row, pawn.column)
             return
             
 

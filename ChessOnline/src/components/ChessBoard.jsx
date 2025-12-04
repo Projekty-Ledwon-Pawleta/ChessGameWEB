@@ -15,33 +15,6 @@ function prettySquareName(row, col) {
   return `${files[col]}${ranks[row]}`;
 }
 
-function isPromotionMove(selectedPiece, sr, sc, r, c) {
-  if (!selectedPiece) return false;
-  const canon = chessValidator.canonicalPieceType(chessValidator.pieceTypeFromCell(selectedPiece, sr));
-  if (canon !== 'pawn') return false;
-  const color = chessValidator.colorOfPieceAt(selectedPiece, sr); // 'b' | 'c'
-  // white ('b') promotes on row 0; black ('c') promotes on row 7
-  if (color === 'b' && r === 0) return true;
-  if (color === 'c' && r === 7) return true;
-  return false;
-}
-
-function closePromotionChooser() {
-  setPromotionMove(null);
-  setPromotionPos(null);
-}
-
-function sendMoveWithPromo(from, to, promo) {
-    wsClient.send({
-      type: 'move',
-      move: {
-        from,
-        to,
-        promo: promo || ''
-      }
-    });
-  }
-
 function sanForMove(cellValue, sr, sc, r, c, board) {
   const dest = prettySquareName(r, c);
   if (!cellValue) return dest;
@@ -500,13 +473,10 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
             alignItems: 'center'
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600, marginRight: 6 }}>Promocja:</div>
-          {/* H - hetman, S - skoczek, G - goniec, W - wieża */}
-          <button onClick={() => handlePromotionChoice('H')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>H</button>
-          <button onClick={() => handlePromotionChoice('S')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>S</button>
-          <button onClick={() => handlePromotionChoice('G')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>G</button>
-          <button onClick={() => handlePromotionChoice('W')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}>W</button>
-          <button onClick={() => closePromotionChooser()} style={{ marginLeft: 8, padding: '6px 8px', borderRadius: 6, cursor: 'pointer' }}>Anuluj</button>
+          <button onClick={() => handlePromotionChoice('H')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cHetman} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('S')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cSkoczek} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('G')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cGoniec} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('W')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cWieza} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
         </div>
       )}
     </div>
@@ -521,5 +491,32 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
       setPromotionPos(null);
     }
     setPromotionMove({ from, to, piece: selectedPiece });
+  }
+
+  function isPromotionMove(selectedPiece, sr, sc, r, c) {
+    if (!selectedPiece) return false;
+    const canon = chessValidator.canonicalPieceType(chessValidator.pieceTypeFromCell(selectedPiece, sr));
+    if (canon !== 'pawn') return false;
+    const color = chessValidator.colorOfPieceAt(selectedPiece, sr); // 'b' | 'c'
+    // white ('b') promotes on row 0; black ('c') promotes on row 7
+    if (color === 'b' && r === 0) return true;
+    if (color === 'c' && r === 7) return true;
+    return false;
+  }
+
+  function closePromotionChooser() {
+    setPromotionMove(null);
+    setPromotionPos(null);
+  }
+
+  function sendMoveWithPromo(from, to, promo) {
+    wsClient.send({
+      type: 'move',
+      move: {
+        from,
+        to,
+        promo: promo || ''
+      }
+    });
   }
 }

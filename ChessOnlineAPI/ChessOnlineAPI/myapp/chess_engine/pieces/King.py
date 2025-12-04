@@ -2,7 +2,6 @@ from .Figure import *
 from ..utils.Move import Move
 
 class King(Figure):
-    img_nr = 4
     name = 'Krol'
     pierwszy = True
 

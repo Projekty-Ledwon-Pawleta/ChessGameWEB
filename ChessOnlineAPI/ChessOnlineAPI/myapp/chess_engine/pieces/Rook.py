@@ -1,7 +1,6 @@
 from .Figure import *
 from ..utils.Move import Move
 class Rook(Figure):
-    img_nr = 0
     name = 'Wieza'
     first = True
 

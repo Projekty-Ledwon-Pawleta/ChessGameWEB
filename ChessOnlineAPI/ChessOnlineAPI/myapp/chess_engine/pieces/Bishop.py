@@ -2,7 +2,6 @@ from .Figure import *
 from ..utils.Move import Move
 
 class Bishop(Figure):
-    img_nr = 2
     name = 'Goniec'
 
     def generate_possible_moves(self, board):

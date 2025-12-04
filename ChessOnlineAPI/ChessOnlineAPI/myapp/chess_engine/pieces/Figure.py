@@ -1,5 +1,4 @@
 class Figure:
-    img_nr = -1
 
     def __init__(self, color, row, column):
         self.color = color
