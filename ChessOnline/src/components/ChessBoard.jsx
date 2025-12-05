@@ -341,15 +341,15 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
         // finally check if any variant is in legalSet
         const legalArray = [...legalSet]; // zamieniamy Set na tablicę
 
-        const allowed = variants.some(v =>
-          legalArray.some(legal => legal.includes(v))
-        );
+       const allowed = variants.some(v =>
+        legalArray.some(legal => isSubsequence(v, legal))
+      );
 
-        // if (!allowed) {
-        //   console.warn('Attempted illegal move (blocked on client):', san, 'coords:', moveStrCoords, 'legal moves:', legalMoves);
-        //   setSelected(null);
-        //   return;
-        // }
+        if (!allowed) {
+          console.warn('Attempted illegal move (blocked on client):', san, 'coords:', moveStrCoords, 'legal moves:', legalMoves);
+          setSelected(null);
+          return;
+        }
 
         if (isPromotionMove(selectedPiece, sr, sc, r, c)) {
           // znajdź element docelowego pola żeby ustawić popup nad nim
@@ -390,6 +390,17 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
         setSelected({ r, c });
       }
     }
+  }
+
+  function isSubsequence(sub, str) {
+    let i = 0;
+    for (let char of str) {
+      if (char === sub[i]) {
+        i++;
+        if (i === sub.length) return true;
+      }
+    }
+    return false;
   }
 
   function handlePromotionChoice(choice) {

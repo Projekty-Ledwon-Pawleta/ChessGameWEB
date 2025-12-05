@@ -150,6 +150,8 @@ export function extractPieceTypeFromSAN(mv) {
 
   const s = mv.trim();
 
+  if (/^(O-O|0-0|O-O-O|0-0-0)/i.test(s)) return "Krol";
+
   const first = s[0];
 
   switch (first) {
