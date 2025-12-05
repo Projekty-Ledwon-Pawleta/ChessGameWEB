@@ -34,7 +34,8 @@ class EngineWrapper:
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
             "turn": mgr.get_game_turn(),
-            "castling": mgr.get_board_castling_rules()
+            "castling": mgr.get_board_castling_rules(),
+            "check": mgr.if_check('b')
         }
 
     @staticmethod
@@ -169,7 +170,8 @@ class EngineWrapper:
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
             "turn": mgr.get_game_turn(),
-            "castling": mgr.get_board_castling_rules()
+            "castling": mgr.get_board_castling_rules(),
+            "check": mgr.if_check(mgr.get_game_turn())
         }
         return json.dumps(state)
 
@@ -227,7 +229,8 @@ class EngineWrapper:
                 "checkmate": mgr.is_checkmate(),
                 "stalemate": mgr.is_stalemate(),
                 "turn": mgr.get_game_turn(),
-                "castling": mgr.get_board_castling_rules()
+                "castling": mgr.get_board_castling_rules(),
+                "check": mgr.if_check(mgr.get_game_turn())
             }
             return True, new_state, info
         except Exception as e:

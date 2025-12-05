@@ -39,6 +39,12 @@ class ChessGameManager:
 
     def promote_pawn(self, promotion_type):
         self.board.promote_pawn(promotion_type)
+    
+    def if_check(self, color='b'):
+        if color == 'b':
+            return self.board.if_check(color="Bialy")
+        else:
+            return self.board.if_check(color="Czarny")
 
     def get_game_turn(self):
         return 'b' if self.board.white_to_move else 'c'

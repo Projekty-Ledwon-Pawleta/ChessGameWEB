@@ -19,7 +19,7 @@ function sanForMove(cellValue, sr, sc, r, c, board) {
   const dest = prettySquareName(r, c);
   if (!cellValue) return dest;
 
-  
+
   // Bezpiecznie określ typ kanoniczny ('pawn','knight','bishop','rook','queen','king')
   const rawType = chessValidator.pieceTypeFromCell(cellValue, sr);
   const canon = chessValidator.canonicalPieceType(rawType);
@@ -75,7 +75,7 @@ function sanForMove(cellValue, sr, sc, r, c, board) {
   }
 
   // dla figur: pobierz literę
-  const pieceLetter = letterMap[canon] || String(rawType || '').slice(0,1).toUpperCase();
+  const pieceLetter = letterMap[canon] || String(rawType || '').slice(0, 1).toUpperCase();
 
   if (!pieceLetter) {
     // fallback -> zwracamy dest (bezpieczne)
@@ -101,6 +101,8 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
   const [promotionMove, setPromotionMove] = useState(null);
   // popup position {left, top, width, height} w px względnie względem całego dokumentu
   const [promotionPos, setPromotionPos] = useState(null);
+  const [isCheck, setIsCheck] = useState(false);
+  const [checkedKingPos, setCheckedKingPos] = useState(null);
   const boardRef = useRef(null);
 
   useEffect(() => {
@@ -127,6 +129,9 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
       const legalFromMsg = msg?.state?.state?.legal_moves ?? msg?.state?.legal_moves ?? [];
       if (Array.isArray(legalFromMsg)) setLegalMoves(legalFromMsg);
       else setLegalMoves([]);
+
+      const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? false;
+      setIsCheck(Boolean(checkFlag));
     });
 
     const unsubMove = wsClient.on('move', (msg) => {
@@ -148,6 +153,14 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
         [];
       if (Array.isArray(legalFromMsg)) setLegalMoves(legalFromMsg);
       else setLegalMoves([]);
+
+      const checkFlag =
+        msg?.move?.state?.check ??
+        msg?.move?.check ??
+        msg?.state?.state?.check ??
+        msg?.state?.check ??
+        false;
+      setIsCheck(Boolean(checkFlag));
     });
 
     // NOWE: obsługa odpowiedzi z serwera z listą legalnych ruchów
@@ -156,13 +169,16 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
 
       // obsłuż różne kształty: {moves: [...]}, {state: {state: {legal_moves: [...]}}}, {legal_moves: [...]}
       const movesFromMsg =
-        msg?.moves ?? 
+        msg?.moves ??
         msg?.legal_moves ??
         msg?.state?.state?.legal_moves ??
         msg?.state?.legal_moves ??
         [];
       if (Array.isArray(movesFromMsg)) setLegalMoves(movesFromMsg);
       else setLegalMoves([]);
+
+      const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? msg?.check ?? false;
+      setIsCheck(Boolean(checkFlag));
     });
 
     // cleanup
@@ -176,38 +192,93 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
 
   // obliczamy mapę legalnych destynacji dla aktualnie zaznaczonego pola
   const legalDestinationsForSelected = useMemo(() => {
-  if (!selected) return new Set();
-  const { r: sr, c: sc } = selected;
-  const cell = board[sr] && board[sr][sc];
-  if (!cell) return new Set();
+    if (!selected) return new Set();
+    const { r: sr, c: sc } = selected;
+    const cell = board[sr] && board[sr][sc];
+    if (!cell) return new Set();
 
-  // jeśli mamy turę i wybrana figura nie należy do gracza na turze -> pusta
-  const selectedColor = chessValidator.colorOfPieceAt(cell, sr);
-  if (turn && selectedColor && selectedColor !== turn) return new Set();
+    // jeśli mamy turę i wybrana figura nie należy do gracza na turze -> pusta
+    const selectedColor = chessValidator.colorOfPieceAt(cell, sr);
+    if (turn && selectedColor && selectedColor !== turn) return new Set();
 
-  const destinations = new Set();
-  const pt = chessValidator.pieceTypeFromCell(cell, sr);
+    const destinations = new Set();
+    const pt = chessValidator.pieceTypeFromCell(cell, sr);
 
-  for (const mv of legalMoves) {
-    if (!mv || typeof mv !== 'string') continue;
+    for (const mv of legalMoves) {
+      if (!mv || typeof mv !== 'string') continue;
 
-    // get destination(s) for this move (handles O-O, O-O-O etc)
-    const mvDests = chessValidator.parseMoveToDests(mv, selected, selectedColor, board);
-    if (!mvDests || mvDests.length === 0) continue;
+      // get destination(s) for this move (handles O-O, O-O-O etc)
+      const mvDests = chessValidator.parseMoveToDests(mv, selected, selectedColor, board);
+      if (!mvDests || mvDests.length === 0) continue;
 
-    for (const dest of mvDests) {
-      const rc = chessValidator.squareNameToRC(dest);
-      if (!rc) continue;
-      // pass mv as mvRaw so canPieceReach can detect castling/en-passant
-      if (chessValidator.canPieceReach(board, sr, sc, rc.r, rc.c, pt, selectedColor, mv)) {
-        destinations.add(dest);
+      const movePieceType = chessValidator.extractPieceTypeFromSAN(mv);
+      if (movePieceType !== pt) continue;
+
+      for (const dest of mvDests) {
+        const rc = chessValidator.squareNameToRC(dest);
+        if (!rc) continue;
+        // pass mv as mvRaw so canPieceReach can detect castling/en-passant
+        if (chessValidator.canPieceReach(board, sr, sc, rc.r, rc.c, pt, selectedColor, mv)) {
+          destinations.add(dest);
+        }
       }
     }
-  }
 
-  return destinations;
+    return destinations;
   }, [selected, legalMoves, board, turn]);
 
+  useEffect(() => {
+    if (!isCheck) {
+      setCheckedKingPos(null);
+      return;
+    }
+
+
+    // jeżeli mamy turę, zakładamy że "check: true" oznacza, że strona na ruchu jest w szachu — oznacz króla tej strony
+    const targetColor = turn || null; // 'b' albo 'c' oczekiwane
+
+
+    // pomocnicza funkcja do znalezienia króla danego koloru
+    function findKingForColor(boardState, color) {
+      for (let rr = 0; rr < 8; rr++) {
+        for (let cc = 0; cc < 8; cc++) {
+          const val = boardState[rr] && boardState[rr][cc];
+          if (!val) continue;
+          const canon = chessValidator.canonicalPieceType(chessValidator.pieceTypeFromCell(val, rr));
+          const col = chessValidator.colorOfPieceAt(val, rr);
+          if (canon === 'king' && col && color && col === color) {
+            return { r: rr, c: cc };
+          }
+        }
+      }
+      return null;
+    }
+
+
+    let kp = null;
+    if (targetColor) {
+      kp = findKingForColor(board, targetColor);
+    }
+
+
+    // jeśli nie mamy turnu albo nie znaleziono króla w obrębie tej logiki — spróbuj znaleźć dowolnego króla, którego można oznaczyć
+    if (!kp) {
+      for (let rr = 0; rr < 8 && !kp; rr++) {
+        for (let cc = 0; cc < 8; cc++) {
+          const val = board[rr] && board[rr][cc];
+          if (!val) continue;
+          const canon = chessValidator.canonicalPieceType(chessValidator.pieceTypeFromCell(val, rr));
+          if (canon === 'king') {
+            kp = { r: rr, c: cc };
+            break;
+          }
+        }
+      }
+    }
+
+
+    setCheckedKingPos(kp);
+  }, [board, isCheck, turn]);
 
   function onSquareClick(r, c) {
     const piece = board[r] && board[r][c];
@@ -386,6 +457,8 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
               return legalDestinationsForSelected.has(dest);
             })();
 
+            const isCheckedKingHere = checkedKingPos && checkedKingPos.r === r && checkedKingPos.c === c && isCheck;
+
             return (
               <div
                 key={key}
@@ -435,7 +508,7 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
                   alignItems: 'center',
                   justifyContent: 'center',
                   background: isLegalDest ? '#facc15' : bg,
-                  border: selectedHere ? '3px solid gold' : '1px solid #999',
+                  border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : '1px solid #999',
                   cursor: piece ? 'pointer' : 'pointer',
                 }}
               >

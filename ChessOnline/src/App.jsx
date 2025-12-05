@@ -1,6 +1,4 @@
 // src/App.jsx
-import React from 'react';
-import ChessWebClient from './components/ChessWebClient';
 import ChessBoard from './components/ChessBoard';
 import './index.css';
 

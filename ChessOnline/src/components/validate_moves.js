@@ -145,6 +145,23 @@ export function parseMoveToDests(mv, selected, selectedColor, board) {
   return [];
 }
 
+export function extractPieceTypeFromSAN(mv) {
+  if (!mv) return null;
+
+  const s = mv.trim();
+
+  const first = s[0];
+
+  switch (first) {
+    case "K": return "Krol";
+    case "H": return "Hetman";
+    case "W": return "Wieza";
+    case "G": return "Goniec";
+    case "S": return "Skoczek";
+    default: return "Pionek";
+  }
+}
+
 
 export function canPieceReach(board, sr, sc, r, c, pieceTypeRaw, myColor, mvRaw = null) {
   if (!inBounds(sr, sc) || !inBounds(r, c)) return false;
