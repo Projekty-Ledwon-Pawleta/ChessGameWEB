@@ -435,106 +435,103 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
 
   // render planszy
   return (
-    <div style={{ padding: 12, position: 'relative' }}>
-      <div style={{ marginBottom: 8, display: 'flex', gap: 12, alignItems: 'center' }}>
-        <div style={{ fontWeight: 600 }}>ChessBoard (serwer-driven)</div>
-        <div style={{ padding: '4px 8px', borderRadius: 6, background: connected ? '#d1fae5' : '#fee2e2', color: connected ? '#064e3b' : '#991b1b' }}>
-          {connected ? 'connected' : 'disconnected'}
-        </div>
+    <div style={{ padding: 12, display: 'flex', justifyContent: 'center', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+      <div style={{ marginBottom: 8, gap: 12 }}>
         {turn ? <div>Aktualna tura: <strong style={{ marginLeft: 6 }}>{turn === 'b' ? 'Białe' : 'Czarne'}</strong></div> : null}
       </div>
 
-      <div
-        ref={boardRef}
-        style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', border: '2px solid #444' }}
-      >
-        {board.map((rowArr, r) =>
-          rowArr.map((cell, c) => {
-            const isLight = (r + c) % 2 === 0;
-            const bg = isLight ? '#f6f0d6' : '#2f7a46';
-            const selectedHere = selected && selected.r === r && selected.c === c;
-            const piece = cell;
-            const key = `${r}-${c}`;
-            const pieceKey = piece ? chessValidator.normalizedPieceKey(piece, r) : null;
-            const imgSrc = pieceKey ? pieceMap[pieceKey] : null;
-            if (piece && !imgSrc) {
-              // eslint-disable-next-line no-console
-              console.warn('Missing piece image for key:', pieceKey, 'piece value:', piece);
-            }
+        <div
+          ref={boardRef}
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', width: 'fit-content', border: '2px solid #444' }}
+        >
+          {board.map((rowArr, r) =>
+            rowArr.map((cell, c) => {
+              const isLight = (r + c) % 2 === 0;
+              const bg = isLight ? '#f6f0d6' : '#2f7a46';
+              const selectedHere = selected && selected.r === r && selected.c === c;
+              const piece = cell;
+              const key = `${r}-${c}`;
+              const pieceKey = piece ? chessValidator.normalizedPieceKey(piece, r) : null;
+              const imgSrc = pieceKey ? pieceMap[pieceKey] : null;
+              if (piece && !imgSrc) {
+                // eslint-disable-next-line no-console
+                console.warn('Missing piece image for key:', pieceKey, 'piece value:', piece);
+              }
 
-            const isLegalDest = (() => {
-              if (!selected) return false;
-              const dest = prettySquareName(r, c);
-              return legalDestinationsForSelected.has(dest);
-            })();
+              const isLegalDest = (() => {
+                if (!selected) return false;
+                const dest = prettySquareName(r, c);
+                return legalDestinationsForSelected.has(dest);
+              })();
 
-            const isCheckedKingHere = checkedKingPos && checkedKingPos.r === r && checkedKingPos.c === c && isCheck;
+              const isCheckedKingHere = checkedKingPos && checkedKingPos.r === r && checkedKingPos.c === c && isCheck;
 
-            return (
-              <div
-                key={key}
-                onClick={() => {
-                  const destPiece = piece;
-                  const destColor = chessValidator.colorOfPieceAt(destPiece, r);
+              return (
+                <div
+                  key={key}
+                  onClick={() => {
+                    const destPiece = piece;
+                    const destColor = chessValidator.colorOfPieceAt(destPiece, r);
 
-                  const normTurn = turn === 'b' ? 'b' : turn === 'w' ? 'c' : turn;
+                    const normTurn = turn === 'b' ? 'b' : turn === 'w' ? 'c' : turn;
 
-                  const sel = selected;
-                  const selPiece = sel ? (board?.[sel.r] && board[sel.r][sel.c]) : null;
-                  const selColor = selPiece ? chessValidator.colorOfPieceAt(selPiece, sel.r) : null;
+                    const sel = selected;
+                    const selPiece = sel ? (board?.[sel.r] && board[sel.r][sel.c]) : null;
+                    const selColor = selPiece ? chessValidator.colorOfPieceAt(selPiece, sel.r) : null;
 
-                  if (sel && sel.r === r && sel.c === c) {
-                    onSquareClick(r, c);
-                    return;
-                  }
-
-                  if (!sel) {
-                    if (!destPiece || destColor === normTurn) {
+                    if (sel && sel.r === r && sel.c === c) {
                       onSquareClick(r, c);
+                      return;
                     }
-                    return;
-                  }
 
-                  if (destPiece && destColor === normTurn) {
-                    onSquareClick(r, c);
-                    return;
-                  }
+                    if (!sel) {
+                      if (!destPiece || destColor === normTurn) {
+                        onSquareClick(r, c);
+                      }
+                      return;
+                    }
 
-                  if (!destPiece) {
-                    onSquareClick(r, c);
-                    return;
-                  }
+                    if (destPiece && destColor === normTurn) {
+                      onSquareClick(r, c);
+                      return;
+                    }
 
-                  if (selColor === normTurn) {
-                    onSquareClick(r, c);
-                    return;
-                  }
-                }}
-                title={prettySquareName(r, c)}
-                style={{
-                  width: 56,
-                  height: 56,
-                  boxSizing: 'border-box',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: isLegalDest ? '#facc15' : bg,
-                  border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : '1px solid #999',
-                  cursor: piece ? 'pointer' : 'pointer',
-                }}
-              >
-                {piece ? (
-                  imgSrc ? (
-                    <img src={imgSrc} alt={piece} style={{ width: 40, height: 40, objectFit: 'contain', pointerEvents: 'none' }} />
-                  ) : (
-                    <div style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontWeight: 700 }}>{piece[0] || '?'}</div>
-                  )
-                ) : null}
-              </div>
-            );
-          })
-        )}
-      </div>
+                    if (!destPiece) {
+                      onSquareClick(r, c);
+                      return;
+                    }
+
+                    if (selColor === normTurn) {
+                      onSquareClick(r, c);
+                      return;
+                    }
+                  }}
+                  title={prettySquareName(r, c)}
+                  style={{
+                    width: 56,
+                    height: 56,
+                    boxSizing: 'border-box',
+                    userSelect: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: isLegalDest ? '#facc15' : bg,
+                    border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : '1px solid #999',
+                    cursor: piece ? 'pointer' : 'pointer',
+                  }}
+                >
+                  {piece ? (
+                    imgSrc ? (
+                      <img src={imgSrc} alt={piece} style={{ width: 40, height: 40, objectFit: 'contain', pointerEvents: 'none' }} />
+                    ) : (
+                      <div style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontWeight: 700 }}>{piece[0] || '?'}</div>
+                    )
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
 
       {/* Promotion chooser popup */}
       {promotionMove && (

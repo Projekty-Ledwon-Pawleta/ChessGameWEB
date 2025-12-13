@@ -11,6 +11,8 @@ import os
 
 from django.core.asgi import get_asgi_application
 
+from myapp.middleware import JwtAuthMiddleware
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ChessOnlineAPI.settings")
 
 
@@ -28,9 +30,7 @@ django_asgi_app = get_asgi_application()
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,  # regular HTTP
-    "websocket": AuthMiddlewareStack(
-        URLRouter(
-            routing.websocket_urlpatterns
-        )
+    "websocket": JwtAuthMiddleware(
+        URLRouter(routing.websocket_urlpatterns)
     ),
 })

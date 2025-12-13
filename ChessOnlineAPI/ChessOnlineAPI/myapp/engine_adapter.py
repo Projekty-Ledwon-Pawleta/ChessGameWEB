@@ -30,6 +30,7 @@ class EngineWrapper:
         mgr = ChessGameManager()
         return {
             "moves": [],
+            "legal_moves": mgr.get_possible_move_notations(),
             "board": mgr.get_board_state(),
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
@@ -166,24 +167,19 @@ class EngineWrapper:
     def serialize_manager_state(mgr: ChessGameManager, moves: List[str]) -> str:
         state = {
             "moves": moves,
+            "legal_moves": mgr.get_possible_move_notations(),
             "board": mgr.get_board_state(),
             "checkmate": mgr.is_checkmate(),
             "stalemate": mgr.is_stalemate(),
             "turn": mgr.get_game_turn(),
             "castling": mgr.get_board_castling_rules(),
-            "check": mgr.if_check(mgr.get_game_turn())
+            "check": mgr.if_check(mgr.get_game_turn()),
         }
         return json.dumps(state)
 
     
     @staticmethod
     def validate_and_apply(serialized_state: str, move_data: dict) -> Tuple[bool, str, Dict[str,Any]]:
-        """
-        Apply a move in your engine's user_notation.
-        Returns:
-          (True, new_serialized_state, info_dict) on success
-          (False, original_serialized_state, {"error": "reason"}) on failure
-        """
         try:
             mgr, moves = EngineWrapper._reconstruct_manager_from_state(serialized_state)
             # Check legal moves first (optional)
@@ -222,17 +218,8 @@ class EngineWrapper:
 
             moves.append(move_obj.user_notation)
             new_state = EngineWrapper.serialize_manager_state(mgr, moves)
-
-            info = {
-                "uci": move_obj.user_notation,
-                "board": mgr.get_board_state(),
-                "checkmate": mgr.is_checkmate(),
-                "stalemate": mgr.is_stalemate(),
-                "turn": mgr.get_game_turn(),
-                "castling": mgr.get_board_castling_rules(),
-                "check": mgr.if_check(mgr.get_game_turn())
-            }
-            return True, new_state, info
+            
+            return True, new_state, {}
         except Exception as e:
             return False, serialized_state, {"error": f"engine exception: {e}"}
 
