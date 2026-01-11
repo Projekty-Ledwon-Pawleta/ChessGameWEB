@@ -4,12 +4,16 @@ import asyncio
 import functools
 import logging
 import traceback
-from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.generic.websocket import AsyncWebsocketConsumer, AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
-from .models import Game
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth import get_user_model
+from .models import Game, Room
 from .engine_adapter import EngineWrapper
 
-# Logging setup
+User = get_user_model()
+
+# Logging setup (bez zmian)
 logger = logging.getLogger("chess")
 logger.setLevel(logging.DEBUG)
 if not logger.handlers:
@@ -23,6 +27,109 @@ if not logger.handlers:
     logger.addHandler(fh)
     logger.addHandler(sh)
 
+# --- DB HELPERS ---
+
+@database_sync_to_async
+def get_all_rooms_serialized():
+    qs = Room.objects.order_by('-created_at')[:200]
+    return [
+        {
+            'name': r.name,
+            'players': [u.username if hasattr(u, 'username') else str(u.id) for u in r.players.all()],
+            'players_count': r.players_count,
+            'has_password': bool(r.password_hash),
+            'status': r.status,
+        } for r in qs
+    ]
+
+@database_sync_to_async
+def create_room_db(name, host_id, password):
+    Game.objects.filter(room_name=name).delete()
+    
+    host = User.objects.get(id=host_id)
+    room = Room.objects.create(name=name, host=host)
+    if password:
+        room.set_password(password)
+    room.save()
+    room.players.add(host)
+    
+    # Tworzymy od razu świeży obiekt Game, żeby był gotowy
+    Game.objects.create(room_name=name, state=EngineWrapper.get_initial_state())
+
+    return {
+        'name': room.name,
+        'players': [host.username or str(host.id)],
+        'players_count': room.players_count,
+        'has_password': bool(room.password_hash),
+        'status': room.status,
+    }
+
+@database_sync_to_async
+def try_join_room_db(name, user_id, password):
+    try:
+        room = Room.objects.get(name=name)
+    except Room.DoesNotExist:
+        return {'success': False, 'error': 'no_room'}
+    
+    # Sprawdzamy czy gracz już tam nie jest (reconnect)
+    if room.players.filter(id=user_id).exists():
+         return {'success': True, 'room': _serialize_room(room)}
+
+    if room.status != Room.STATUS_OPEN:
+        return {'success': False, 'error': 'not_open'}
+    
+    # Walidacja hasła tylko jeśli pokój ma hasło
+    if room.password_hash and not room.check_password(password):
+        return {'success': False, 'error': 'bad_password'}
+        
+    if room.players.count() >= 2:
+        return {'success': False, 'error': 'room_full'}
+
+    user = User.objects.get(id=user_id)
+    room.players.add(user)
+    
+    # Aktualizacja statusu jeśli pełny
+    if room.players.count() >= 2:
+        # Opcjonalnie: zmiana statusu na PLAYING
+        pass 
+
+    return {'success': True, 'room': _serialize_room(room)}
+
+@database_sync_to_async
+def remove_player_from_room_db(room_name, user_id):
+    """
+    Usuwa gracza z pokoju. Jeśli pokój pusty -> usuwa Room ORAZ Game.
+    """
+    try:
+        room = Room.objects.get(name=room_name)
+        user = User.objects.get(id=user_id)
+        room.players.remove(user)
+        
+        # Jeśli pokój jest pusty, usuwamy go
+        if room.players.count() == 0:
+            # --- POPRAWKA 2: CZYSZCZENIE STANU ---
+            # Usuwamy stan gry powiązany z tym pokojem, aby następna gra o tej nazwie była czysta
+            Game.objects.filter(room_name=room_name).delete()
+            
+            room.delete()
+            return None
+            
+        return _serialize_room(room)
+    except (Room.DoesNotExist, User.DoesNotExist):
+        return None
+
+def _serialize_room(room):
+    return {
+        'name': room.name,
+        'players': [p.username or str(p.id) for p in room.players.all()],
+        'players_count': room.players_count,
+        'has_password': bool(room.password_hash),
+        'status': room.status,
+    }
+
+
+# --- CONSUMERS ---
+
 class ChessGameConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.room_name = self.scope['url_route']['kwargs']['room_name']
@@ -32,32 +139,32 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             return
 
         self.group_name = f"game_{self.room_name}"
-
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
         user = self.scope.get("user")
-        logger.info(
-            "Client connected: room=%s channel=%s user=%s",
-            self.room_name, self.channel_name, user
-        )
+        logger.info("Client connected: room=%s channel=%s user=%s", self.room_name, self.channel_name, user)
 
         try:
+            # Upewnij się, że gra istnieje (logika szachowa)
             await self._ensure_game_exists()
             state = await self._get_state()
+
+            players_list = await self._get_game_players()
 
             await self.send_json({
                 "type": "connected",
                 "room": self.room_name,
-                "state": state
+                "state": state,
+                "players": players_list # <--- Wysyłamy to do Reacta
             })
 
-            # 🔔 notify others
+            # Powiadom innych w pokoju gry
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     "type": "player_joined",
-                    "user": str(user) if user else "anon"
+                    "user": str(user) if user and not user.is_anonymous else "anon"
                 }
             )
         except Exception:
@@ -65,8 +172,33 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             await self.send_json({"type": "error", "detail": "server error during connect"})
 
     async def disconnect(self, close_code):
+        # 1. Usuń z grupy WebSocket
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
-        logger.info("Client disconnected: room=%s channel=%s", self.room_name, self.channel_name)
+        logger.info("Client disconnected: room=%s", self.room_name)
+
+        # 2. Usuń gracza z bazy danych (Room) i zaktualizuj Lobby
+        user = self.scope.get("user")
+        if user and not user.is_anonymous:
+            updated_room_data = await remove_player_from_room_db(self.room_name, user.id)
+            
+            if updated_room_data:
+                # Jeśli pokój nadal istnieje, wyślij update do Lobby
+                await self.channel_layer.group_send("lobby", {
+                    "type": "lobby.room_update",
+                    "room": updated_room_data
+                })
+            else:
+                # Jeśli pokój został usunięty (bo był pusty), wyślij informację o usunięciu?
+                # Można to obsłużyć, ale room_update zazwyczaj wystarczy, 
+                # chyba że chcemy jawnie usunąć kafelek z frontu.
+                # W prostym wariancie, jeśli update nie przyjdzie, lista się nie odświeży, 
+                # więc lepiej wysłać "room_list" ponownie lub specjalny event "room_deleted".
+                # Tutaj dla uproszczenia po prostu zmusimy lobby do odświeżenia listy.
+                rooms = await get_all_rooms_serialized()
+                await self.channel_layer.group_send("lobby", {
+                    "type": "lobby.room_list_update", # Nowy typ wiadomości pomocniczy
+                    "rooms": rooms
+                })
 
     async def receive(self, text_data=None, bytes_data=None):
         try:
@@ -97,45 +229,46 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
 
             success, payload_or_err = result
             if success:
-                logger.info("Move applied successfully: %s", move_data)
                 await self.channel_layer.group_send(
                     self.group_name,
                     {"type": "broadcast_move", "move": payload_or_err}
                 )
             else:
-                logger.info("Move rejected: %s reason=%s", move_data, payload_or_err)
                 await self.send_json({"type":"error","detail": payload_or_err})
+        
         elif msg_type == "sync_request":
             state = await self._get_state()
             await self.send_json({"type":"sync", "state": state})
+        
         elif msg_type == "chat":
             msg = data.get("message", "")
-            logger.info("Chat in room %s: %s", self.room_name, msg)
-            await self.channel_layer.group_send(self.group_name, {"type":"broadcast_chat", "message": msg, "sender": str(self.scope.get("user") or "anon")})
+            await self.channel_layer.group_send(self.group_name, {"type":"broadcast_chat", "message": msg, "sender": str(user)})
+        
         else:
             logger.warning("Unknown message type: %s", msg_type)
             await self.send_json({"type":"error","detail":"unknown message type"})
 
+    # Event Handlers
     async def broadcast_move(self, event):
         await self.send_json({"type":"move", "move": event["move"]})
 
     async def broadcast_chat(self, event):
         await self.send_json({"type":"chat", "message": event["message"], "sender": event.get("sender")})
     
-    async def player_joined(self, event): await self.send_json({ "type": "player_joined", "user": event["user"] })
+    async def player_joined(self, event): 
+        await self.send_json({ "type": "player_joined", "user": event["user"] })
 
+    # Helpery Sync/Async (bez zmian logiki gry)
     def _apply_move_sync(self, move_data: dict):
+        # ... (tutaj Twoja logika silnika szachowego z poprzedniego kodu)
         try:
-            logger.debug("_apply_move_sync start for move=%s room=%s", move_data, self.room_name)
             game, created = Game.objects.get_or_create(room_name=self.room_name)
             if created or not game.state:
                 game.state = EngineWrapper.get_initial_state()
 
-            # --- pass JSON directly do validate_and_apply ---
             valid, new_state, info = EngineWrapper.validate_and_apply(game.state, move_data)
             if not valid:
                 err = info.get("error") if isinstance(info, dict) else str(info)
-                logger.debug("Engine rejected move=%s error=%s", move_data, err)
                 return False, err or "illegal move"
 
             game.state = new_state
@@ -146,14 +279,10 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
                 "info": info,
                 "state": json.loads(new_state),
             }
-            
-            logger.debug("_apply_move_sync success payload=%s", payload)
             return True, payload
         except Exception as e:
             tb = traceback.format_exc()
-            logger.exception("Exception in _apply_move_sync: %s", tb)
-            with open("chess_error_traceback.log", "a", encoding="utf-8") as f:
-                f.write(tb + "\n\n")
+            logger.exception("Exception in _apply_move_sync")
             return False, f"server error: {e}"
 
     @database_sync_to_async
@@ -164,100 +293,41 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             game.save(update_fields=["state"])
 
     @database_sync_to_async
+    def _get_game_players(self):
+        try:
+            # Zakładamy, że pierwszy gracz (zazwyczaj host) to białe, drugi to czarne.
+            # Sortujemy po ID, żeby kolejność była zawsze ta sama.
+            room = Room.objects.get(name=self.room_name)
+            return [p.username for p in room.players.all().order_by('id')]
+        except Room.DoesNotExist:
+            return []
+
+    @database_sync_to_async
     def _get_state(self):
+        # ... (Twoja logika pobierania stanu)
         game = Game.objects.get(room_name=self.room_name)
         try:
             obj = json.loads(game.state) if game.state else {}
-        except Exception:
-            logger.warning("Failed to parse game.state for room=%s", self.room_name)
+        except:
             obj = {}
-
-        # Spróbuj wywnioskować aktualną turę przez rekonstrukcję managera
+        
         try:
             mgr, _ = EngineWrapper._reconstruct_manager_from_state(game.state)
-            # korzystamy z metody get_game_turn() którą dodałeś
             turn = mgr.get_game_turn()
-        except Exception:
-            logger.exception("Failed to reconstruct manager to determine turn for room=%s", self.room_name)
+        except:
             turn = None
-
         return {"state": obj, "turn": turn}
 
     async def send_json(self, data):
         await self.send(text_data=json.dumps(data))
 
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from django.contrib.auth.models import AnonymousUser
-from .models import Room
-from django.contrib.auth import get_user_model
 
-User = get_user_model()
-
-# helpery db-bound
-@database_sync_to_async
-def get_all_rooms_serialized():
-    qs = Room.objects.order_by('-created_at')[:200]
-    return [
-        {
-            'name': r.name,
-            'players': [u.username if hasattr(u, 'username') else str(u.id) for u in r.players.all()],
-            'players_count': r.players_count,
-            'has_password': bool(r.password_hash),
-            'status': r.status,
-        } for r in qs
-    ]
-
-@database_sync_to_async
-def create_room_db(name, host_id, password):
-    host = User.objects.get(id=host_id)
-    room = Room.objects.create(name=name, host=host)
-    room.set_password(password)
-    room.save()
-    room.players.add(host)
-    return {
-        'name': room.name,
-        'players': [host.username or str(host.id)],
-        'players_count': room.players_count,
-        'has_password': bool(room.password_hash),
-        'status': room.status,
-    }
-
-@database_sync_to_async
-def try_join_room_db(name, user_id, password):
-    try:
-        room = Room.objects.get(name=name)
-    except Room.DoesNotExist:
-        return {'success': False, 'error': 'no_room'}
-    if room.status != Room.STATUS_OPEN:
-        return {'success': False, 'error': 'not_open'}
-    if not room.check_password(password):
-        return {'success': False, 'error': 'bad_password'}
-    user = User.objects.get(id=user_id)
-    room.players.add(user)
-    return {'success': True, 'room': {
-        'name': room.name,
-        'players': [p.username or str(p.id) for p in room.players.all()],
-        'players_count': room.players_count,
-        'has_password': bool(room.password_hash),
-        'status': room.status,
-    }}
-
+# --- LOBBY CONSUMER ---
 
 class LobbyConsumer(AsyncJsonWebsocketConsumer):
-    """
-    Protocol: clients join group 'lobby'
-    supported incoming:
-      {type: 'lobby_subscribe'}
-      {type: 'create_room', name, password, max_players}
-      {type: 'join_room', name, password}
-    outgoing events:
-      room_list, room_created, room_update, joined, error
-    """
     async def connect(self):
-        # allow anonymous to view lobby but we keep user on scope (middleware)
         await self.accept()
         await self.channel_layer.group_add("lobby", self.channel_name)
-        # optionally send initial list
         rooms = await get_all_rooms_serialized()
         await self.send_json({'type': 'room_list', 'rooms': rooms})
 
@@ -267,6 +337,7 @@ class LobbyConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content):
         typ = content.get('type')
         user = self.scope.get('user') or AnonymousUser()
+
         if typ == 'lobby_subscribe':
             rooms = await get_all_rooms_serialized()
             await self.send_json({'type': 'room_list', 'rooms': rooms})
@@ -276,44 +347,62 @@ class LobbyConsumer(AsyncJsonWebsocketConsumer):
             if user.is_anonymous:
                 await self.send_json({'type': 'error', 'message': 'auth required'})
                 return
+            
             name = content.get('name')
             password = content.get('password', '')
+            
+            # Tworzymy pokój w DB
             room_obj = await create_room_db(name, user.id, password)
-            # broadcast new room to lobby
+            
+            # 1. Broadcast do wszystkich w lobby (że powstał nowy pokój)
             await self.channel_layer.group_send("lobby", {
                 "type": "lobby.room_created",
                 "room": room_obj
             })
-            # also notify creator
-            await self.send_json({'type': 'room_created', 'room': room_obj})
+            
+            # 2. AUTO-JOIN: Wyślij wiadomość 'joined' bezpośrednio do twórcy!
+            # To sprawi, że frontend od razu przekieruje go do gry.
+            await self.send_json({
+                'type': 'joined', 
+                'room': room_obj, 
+                'success': True
+            })
             return
 
         if typ == 'join_room':
             if user.is_anonymous:
                 await self.send_json({'type': 'error', 'message': 'auth required'})
                 return
+            
             name = content.get('name')
             password = content.get('password', '')
+            
             res = await try_join_room_db(name, user.id, password)
+            
             if not res.get('success'):
                 err = res.get('error', 'unknown')
                 await self.send_json({'type': 'error', 'message': err})
                 return
-            # broadcast room_update to lobby
+            
+            # Broadcast update do lobby (zmieniła się liczba graczy)
             await self.channel_layer.group_send("lobby", {
                 "type": "lobby.room_update",
                 "room": res['room']
             })
-            # notify the joiner
+            
+            # Notify the joiner
             await self.send_json({'type': 'joined', 'room': res['room'], 'success': True})
             return
 
-        # unknown type
         await self.send_json({'type': 'error', 'message': 'unknown type'})
 
-    # handlers for group sends
+    # Handlers for group sends
     async def lobby_room_created(self, event):
         await self.send_json({'type': 'room_created', 'room': event['room']})
 
     async def lobby_room_update(self, event):
         await self.send_json({'type': 'room_update', 'room': event['room']})
+    
+    # Dodatkowa obsługa pełnego odświeżenia listy (np. po usunięciu pokoju)
+    async def lobby_room_list_update(self, event):
+        await self.send_json({'type': 'room_list', 'rooms': event['rooms']})

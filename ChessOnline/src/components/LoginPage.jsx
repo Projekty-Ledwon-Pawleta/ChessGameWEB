@@ -33,6 +33,8 @@ export default function LoginPage({ onSubmit }) {
             // Zapis tokenów (dla prostoty używamy localStorage)
             localStorage.setItem("access_token", json.access);
             localStorage.setItem("refresh_token", json.refresh);
+            
+            localStorage.setItem("username", data.username);
 
             // opcjonalnie: ustaw globalny header axios jeśli używasz axios
             // api.defaults.headers.common['Authorization'] = `Bearer ${json.access}`;

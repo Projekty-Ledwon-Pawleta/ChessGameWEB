@@ -64,6 +64,7 @@ export default function HomePage() {
     // wyczyść localStorage i rozłącz WS
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    localStorage.removeItem("username");
     try { wsClient.disconnect(); } catch(e) { /* ignore if not used */ }
 
     setUser(null);

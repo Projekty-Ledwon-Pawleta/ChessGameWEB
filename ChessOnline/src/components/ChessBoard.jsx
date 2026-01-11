@@ -90,7 +90,12 @@ function sanForMove(cellValue, sr, sc, r, c, board) {
 }
 
 
-export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefined }) {
+export default function ChessBoard({ 
+    defaultRoom = 'testroom', 
+    wsHost = undefined, 
+    username = null,      // "Kto ja jestem?"
+    initialPlayers = []   // ["PlayerWhite", "PlayerBlack"]
+  }) {
   const [board, setBoard] = useState(emptyBoard()); // board pochodzi z serwera
   const [selected, setSelected] = useState(null); // {r,c}
   const [turn, setTurn] = useState(null); // opcjonalnie: 'b' lub 'c' — ustawiany z serwera
@@ -98,6 +103,11 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
 
   // nowe: lista legalnych ruchów w notacji serwera (np. ["e5","Sa3","Ke2"...])
   const [legalMoves, setLegalMoves] = useState([]);
+
+  const [players, setPlayers] = useState(initialPlayers);
+  const [history, setHistory] = useState([]);
+  const [orientation, setOrientation] = useState('b');
+
   const [promotionMove, setPromotionMove] = useState(null);
   // popup position {left, top, width, height} w px względnie względem całego dokumentu
   const [promotionPos, setPromotionPos] = useState(null);
@@ -105,91 +115,95 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
   const [checkedKingPos, setCheckedKingPos] = useState(null);
   const boardRef = useRef(null);
 
+  const mySide = useMemo(() => {
+    if (!username || players.length === 0) return null; // Spectator lub ładowanie
+    // players[0] = Białe, players[1] = Czarne
+    if (players[0] === username) return 'b';
+    if (players[1] === username) return 'c';
+    return null; // Spectator
+  }, [username, players]);
+
   useEffect(() => {
-    // Podłącz się automatycznie do serwera przy mount
+    if (mySide === 'c') setOrientation('c');
+    else setOrientation('b');
+  }, [mySide]);
+
+  useEffect(() => {
     try {
       wsClient.connect({ host: wsHost, room: defaultRoom });
     } catch (e) {
-      // connect może rzucić jeśli np. room === null — ignorujemy, użytkownik może podłączyć z innego miejsca
       console.warn('wsClient.connect error:', e);
     }
 
-    // Subskrypcje wiadomości od serwera — serwer powinien wysyłać 'connected', 'sync' albo 'move' z polem state.board
     const unsubOpen = wsClient.on('open', () => setConnected(true));
     const unsubClose = wsClient.on('close', () => setConnected(false));
 
+    // 1. ODBIÓR STANU PRZY POŁĄCZENIU
     const unsubConnected = wsClient.on('connected', (msg) => {
-      console.log("msg", msg)
+      console.log("Connected msg:", msg);
+      if (msg.state) {
+          const s = msg.state.state || msg.state;
+          
+          if (s.board) setBoard(s.board);
+          if (s.turn) setTurn(s.turn);
+          if (s.check) setIsCheck(s.check);
+          
+          // Legal moves
+          const legals = msg.state.legal_moves || s.legal_moves || [];
+          setLegalMoves(legals);
 
-      if (msg && msg.state && msg.state.state && msg.state.state.board) {
-        setBoard(msg.state.state.board);
-        if (msg.state.state.turn) setTurn(msg.state.state.turn);
+          // --- NOWE: Historia prosto z serwera ---
+          // Serwer zwraca gotową tablicę np. ["e4", "e5", "Sf3"]
+          if (s.moves && Array.isArray(s.moves)) {
+              setHistory(s.moves);
+          }
       }
-
-      const legalFromMsg = msg?.state?.state?.legal_moves ?? msg?.state?.legal_moves ?? [];
-      if (Array.isArray(legalFromMsg)) setLegalMoves(legalFromMsg);
-      else setLegalMoves([]);
-
-      const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? false;
-      setIsCheck(Boolean(checkFlag));
+      if (msg.players && Array.isArray(msg.players)) {
+          setPlayers(msg.players);
+      }
     });
 
+    // 2. ODBIÓR RUCHU
     const unsubMove = wsClient.on('move', (msg) => {
-      console.log("msg", msg)
+      console.log("Move msg:", msg);
+      
+      const moveData = msg.move || {};
+      const s = moveData.state || msg.state || {}; // fallback
+      
+      const stateObj = s.state || s; 
+      
+      // Update board/turn/check
+      if (stateObj.board) setBoard(stateObj.board);
+      if (stateObj.turn) setTurn(stateObj.turn);
+      setIsCheck(Boolean(stateObj.check));
 
-      if (msg && msg.move && msg.move.state && msg.move.state.board) {
-        setBoard(msg.move.state.board);
-        if (msg.move.state.turn) setTurn(msg.move.state.turn);
-      } else if (msg && msg.state && msg.state.state && msg.state.state.board) {
-        setBoard(msg.state.state.board);
-        if (msg.state.state.turn) setTurn(msg.state.state.turn);
+      // Update legal moves
+      const legals = moveData.legal_moves || stateObj.legal_moves || [];
+      setLegalMoves(legals);
+
+      // --- NOWE: Aktualizacja historii z tablicy serwera ---
+      // Zamiast dodawać pojedynczy ruch, podmieniamy całą tablicę.
+      // To automatycznie naprawia problem duplikatów i formatowania.
+      if (stateObj.moves && Array.isArray(stateObj.moves)) {
+          setHistory(stateObj.moves);
       }
-
-      const legalFromMsg =
-        msg?.move?.state?.legal_moves ??
-        msg?.move?.legal_moves ??
-        msg?.state?.state?.legal_moves ??
-        msg?.state?.legal_moves ??
-        [];
-      if (Array.isArray(legalFromMsg)) setLegalMoves(legalFromMsg);
-      else setLegalMoves([]);
-
-      const checkFlag =
-        msg?.move?.state?.check ??
-        msg?.move?.check ??
-        msg?.state?.state?.check ??
-        msg?.state?.check ??
-        false;
-      setIsCheck(Boolean(checkFlag));
     });
 
-    // NOWE: obsługa odpowiedzi z serwera z listą legalnych ruchów
     const unsubLegal = wsClient.on('legal_moves', (msg) => {
-      console.log("msg", msg)
-
-      // obsłuż różne kształty: {moves: [...]}, {state: {state: {legal_moves: [...]}}}, {legal_moves: [...]}
-      const movesFromMsg =
-        msg?.moves ??
-        msg?.legal_moves ??
-        msg?.state?.state?.legal_moves ??
-        msg?.state?.legal_moves ??
-        [];
-      if (Array.isArray(movesFromMsg)) setLegalMoves(movesFromMsg);
-      else setLegalMoves([]);
-
-      const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? msg?.check ?? false;
-      setIsCheck(Boolean(checkFlag));
+       console.log("msg", msg)
+       const movesFromMsg = msg?.moves ?? msg?.legal_moves ?? msg?.state?.state?.legal_moves ?? [];
+       if (Array.isArray(movesFromMsg)) setLegalMoves(movesFromMsg);
+       
+       const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? msg?.check ?? false;
+       setIsCheck(Boolean(checkFlag));
     });
 
-    // cleanup
     return () => {
       unsubOpen(); unsubClose(); unsubConnected(); unsubMove(); unsubLegal();
-      // opcjonalnie rozłączamy się — jeżeli inna część aplikacji korzysta z wsClient i chce kontrolować połączenie, usuń disconnect
       try { wsClient.disconnect(); } catch (e) { /* ignore */ }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
+  
   // obliczamy mapę legalnych destynacji dla aktualnie zaznaczonego pola
   const legalDestinationsForSelected = useMemo(() => {
     if (!selected) return new Set();
@@ -281,7 +295,15 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
   }, [board, isCheck, turn]);
 
   function onSquareClick(r, c) {
+
+    if (mySide && turn !== mySide) return;
+
     const piece = board[r] && board[r][c];
+
+    if (piece && !selected) {
+        const pColor = chessValidator.colorOfPieceAt(piece, r);
+        if (mySide && pColor !== mySide) return;
+    }
 
     // jeśli mamy już zaznaczenie
     if (selected) {
@@ -433,28 +455,48 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
     }
   }, [promotionMove]);
 
-  // render planszy
-  return (
-    <div style={{ padding: 12, display: 'flex', justifyContent: 'center', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
-      <div style={{ marginBottom: 8, gap: 12 }}>
-        {turn ? <div>Aktualna tura: <strong style={{ marginLeft: 6 }}>{turn === 'b' ? 'Białe' : 'Czarne'}</strong></div> : null}
-      </div>
+  const rows = orientation === 'b' ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
+  const cols = orientation === 'b' ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
 
+  // render planszy
+return (
+    <div className="game-container" style={{ padding: 12, display: 'flex', gap: 20, justifyContent: 'center', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      
+      {/* LEWA STRONA: PLANSZA */}
+      <div className="game-board-wrapper" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        
+        {/* Pasek narzędzi nad planszą */}
+        <div style={{ marginBottom: 8, gap: 12, display: 'flex', alignItems: 'center' }}>
+          {mySide && (
+             <div style={{background: '#333', color: '#fff', padding: '4px 8px', borderRadius: 4, fontSize: '0.9rem'}}>
+                Grasz jako: <strong>{mySide === 'b' ? 'Białe' : 'Czarne'}</strong>
+             </div>
+          )}
+          <button onClick={() => setOrientation(o => o === 'b' ? 'c' : 'b')} style={{cursor: 'pointer'}}>
+             Odwróć
+          </button>
+        </div>
+
+        {/* Siatka Planszy */}
         <div
           ref={boardRef}
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', width: 'fit-content', border: '2px solid #444' }}
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(8,56px)', width: 'fit-content', border: '5px solid #4a3c31', position: 'relative' }}
         >
-          {board.map((rowArr, r) =>
-            rowArr.map((cell, c) => {
+          {rows.map((r) => 
+            cols.map((c) => {
+              // UWAGA: Pobieramy komórkę używając indeksów z mapowania (dla odwracania)
+              const cell = board[r][c];
+              
               const isLight = (r + c) % 2 === 0;
               const bg = isLight ? '#f6f0d6' : '#2f7a46';
               const selectedHere = selected && selected.r === r && selected.c === c;
+              
               const piece = cell;
               const key = `${r}-${c}`;
               const pieceKey = piece ? chessValidator.normalizedPieceKey(piece, r) : null;
               const imgSrc = pieceKey ? pieceMap[pieceKey] : null;
+
               if (piece && !imgSrc) {
-                // eslint-disable-next-line no-console
                 console.warn('Missing piece image for key:', pieceKey, 'piece value:', piece);
               }
 
@@ -469,43 +511,7 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
               return (
                 <div
                   key={key}
-                  onClick={() => {
-                    const destPiece = piece;
-                    const destColor = chessValidator.colorOfPieceAt(destPiece, r);
-
-                    const normTurn = turn === 'b' ? 'b' : turn === 'w' ? 'c' : turn;
-
-                    const sel = selected;
-                    const selPiece = sel ? (board?.[sel.r] && board[sel.r][sel.c]) : null;
-                    const selColor = selPiece ? chessValidator.colorOfPieceAt(selPiece, sel.r) : null;
-
-                    if (sel && sel.r === r && sel.c === c) {
-                      onSquareClick(r, c);
-                      return;
-                    }
-
-                    if (!sel) {
-                      if (!destPiece || destColor === normTurn) {
-                        onSquareClick(r, c);
-                      }
-                      return;
-                    }
-
-                    if (destPiece && destColor === normTurn) {
-                      onSquareClick(r, c);
-                      return;
-                    }
-
-                    if (!destPiece) {
-                      onSquareClick(r, c);
-                      return;
-                    }
-
-                    if (selColor === normTurn) {
-                      onSquareClick(r, c);
-                      return;
-                    }
-                  }}
+                  onClick={() => onSquareClick(r, c)} // onSquareClick używa logicznych r,c co jest OK
                   title={prettySquareName(r, c)}
                   style={{
                     width: 56,
@@ -515,49 +521,85 @@ export default function ChessBoard({ defaultRoom = 'testroom', wsHost = undefine
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    background: isLegalDest ? '#facc15' : bg,
-                    border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : '1px solid #999',
-                    cursor: piece ? 'pointer' : 'pointer',
+                    background: bg, // base background
+                    border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : 'none',
+                    cursor: 'pointer',
+                    position: 'relative'
                   }}
                 >
-                  {piece ? (
-                    imgSrc ? (
-                      <img src={imgSrc} alt={piece} style={{ width: 40, height: 40, objectFit: 'contain', pointerEvents: 'none' }} />
-                    ) : (
-                      <div style={{ width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#222', fontWeight: 700 }}>{piece[0] || '?'}</div>
-                    )
-                  ) : null}
+                  {/* Marker legalnego ruchu (kropka lub kółko) */}
+                  {isLegalDest && !piece && <div style={{width: 16, height: 16, background: 'rgba(0,0,0,0.2)', borderRadius: '50%'}} />}
+                  {isLegalDest && piece && <div style={{position: 'absolute', width: 56, height: 56, border: '4px solid rgba(0,0,0,0.2)', borderRadius: '50%'}} />}
+
+                  {piece && imgSrc ? (
+                    <img src={imgSrc} alt={piece} style={{ width: 48, height: 48, objectFit: 'contain', pointerEvents: 'none', zIndex: 2 }} />
+                  ) : (
+                    piece && <div style={{ fontWeight: 700 }}>{piece}</div>
+                  )}
+
+                  {/* Koordynaty na brzegach (opcjonalne) */}
+                  {c === (orientation==='b'?0:7) && <span style={{position:'absolute', top:2, left:2, fontSize:10, color: isLight?'#2f7a46':'#f6f0d6', pointerEvents:'none'}}>{8-r}</span>}
+                  {r === (orientation==='b'?7:0) && <span style={{position:'absolute', bottom:0, right:2, fontSize:10, color: isLight?'#2f7a46':'#f6f0d6', pointerEvents:'none'}}>{'abcdefgh'[c]}</span>}
                 </div>
               );
             })
           )}
         </div>
+      </div>
+
+      {/* PRAWA STRONA: PANEL BOCZNY */}
+      <div className="game-sidebar" style={{ width: 260, background: '#f8f9fa', padding: 15, borderRadius: 8, border: '1px solid #ddd', height: 'fit-content' }}>
+          <h3 style={{marginTop: 0, borderBottom: '1px solid #ccc', paddingBottom: 5}}>Gracze</h3>
+          
+          <div style={{ padding: 5, fontWeight: turn === 'b' ? 'bold' : 'normal', color: turn === 'b' ? '#2e7d32' : '#000' }}>
+            ⚪ {players[0] || "Oczekiwanie..."} (Białe)
+          </div>
+          <div style={{ padding: 5, fontWeight: turn === 'c' ? 'bold' : 'normal', color: turn === 'c' ? '#2e7d32' : '#000' }}>
+            ⚫ {players[1] || "Oczekiwanie..."} (Czarne)
+          </div>
+
+          <div style={{ marginTop: 15 }}>
+            <strong>Status: </strong> 
+            {connected ? <span style={{color:'green'}}>Połączono</span> : <span style={{color:'red'}}>Rozłączono</span>}
+            {isCheck && <div style={{color: 'crimson', fontWeight:'bold', marginTop: 4}}>SZACH!</div>}
+          </div>
+
+          <h4 style={{marginBottom: 5, marginTop: 15}}>Historia</h4>
+          <div className="history-list" style={{ height: 200, overflowY: 'auto', background: '#fff', border: '1px solid #eee', padding: 5, fontFamily: 'monospace', fontSize: '0.9rem' }}>
+              {history.length === 0 ? <div style={{color: '#999'}}>Brak ruchów</div> : null}
+              {history.map((m, i) => (
+                  <span key={i} style={{ display: 'inline-block', marginRight: 8 }}>
+                      {i % 2 === 0 ? <span style={{color: '#888'}}>{(i/2)+1}.</span> : null} {m}
+                  </span>
+              ))}
+              {/* Dummy element do autoscrollowania */}
+              <div ref={el => el && el.scrollIntoView({ behavior: 'smooth' })} />
+          </div>
+      </div>
 
       {/* Promotion chooser popup */}
       {promotionMove && (
         <div
           id="promotion-popup"
           style={{
-            position: 'absolute',
-            // jeśli mamy wyliczoną pozycję pola — wycentruj popup nad polem; inaczej centrum planszy
-            left: promotionPos ? promotionPos.left + (promotionPos.width / 2) - 90 : '50%',
-            top: promotionPos ? promotionPos.top + (promotionPos.height / 2) - 28 : '50%',
-            transform: promotionPos ? 'none' : 'translate(-50%,-50%)',
+            position: 'fixed', // Używamy fixed center żeby uniknąć problemów z pozycjonowaniem
+            top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
             zIndex: 9999,
-            padding: 6,
+            padding: 10,
             background: '#fff',
-            border: '1px solid #444',
+            border: '2px solid #444',
             borderRadius: 8,
-            boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
             display: 'flex',
-            gap: 6,
+            gap: 10,
             alignItems: 'center'
           }}
         >
-          <button onClick={() => handlePromotionChoice('H')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cHetman} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
-          <button onClick={() => handlePromotionChoice('S')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cSkoczek} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
-          <button onClick={() => handlePromotionChoice('G')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cGoniec} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
-          <button onClick={() => handlePromotionChoice('W')} style={{ padding: '6px 8px', minWidth: 36, borderRadius: 6, cursor: 'pointer' }}><img src={pieceMap.cWieza} alt="Hetman" style={{ width: 32, height: 32 }} /></button>
+          <h4 style={{position:'absolute', top:-30, width:'100%', textAlign:'center', color:'#fff', textShadow:'0 1px 2px #000'}}>Wybierz figurę</h4>
+          <button onClick={() => handlePromotionChoice('H')} style={{ padding: '6px', minWidth: 40, cursor: 'pointer' }}><img src={pieceMap.cHetman || pieceMap.bHetman} alt="H" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('S')} style={{ padding: '6px', minWidth: 40, cursor: 'pointer' }}><img src={pieceMap.cSkoczek || pieceMap.bSkoczek} alt="S" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('G')} style={{ padding: '6px', minWidth: 40, cursor: 'pointer' }}><img src={pieceMap.cGoniec || pieceMap.bGoniec} alt="G" style={{ width: 32, height: 32 }} /></button>
+          <button onClick={() => handlePromotionChoice('W')} style={{ padding: '6px', minWidth: 40, cursor: 'pointer' }}><img src={pieceMap.cWieza || pieceMap.bWieza} alt="W" style={{ width: 32, height: 32 }} /></button>
         </div>
       )}
     </div>
