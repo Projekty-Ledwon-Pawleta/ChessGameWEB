@@ -103,7 +103,7 @@ export default function RoomsPage({ wsHost }) {
       unsubRoomList(); unsubRoomUpdate(); unsubRoomCreated(); unsubJoined();
       unsubError();
       // don't disconnect here if other parts of the app rely on wsClient. If you want to disconnect:
-      //try { wsClient.disconnect(); } catch(e) {}
+      try { wsClient.disconnect(); } catch(e) {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

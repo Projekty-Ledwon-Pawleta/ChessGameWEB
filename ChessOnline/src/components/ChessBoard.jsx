@@ -118,6 +118,11 @@ export default function ChessBoard({
   const [isCheckmate, setIsCheckmate] = useState(false); 
   const [isStalemate, setIsStalemate] = useState(false);
 
+  const [gameOverReason, setGameOverReason] = useState(null);
+  const [winner, setWinner] = useState(null); 
+  
+  const [incomingDrawOffer, setIncomingDrawOffer] = useState(null);
+
   const boardRef = useRef(null);
 
   const mySide = useMemo(() => {
@@ -149,8 +154,37 @@ export default function ChessBoard({
       
       // Flagi stanu
       setIsCheck(Boolean(s.check));
-      setIsCheckmate(Boolean(s.checkmate));
-      setIsStalemate(Boolean(s.stalemate));
+
+      let reason = null;
+      let win = null;
+
+      if (s.checkmate) {
+         reason = 'checkmate';
+         // Jeśli jest mat i tura białych -> wygrały czarne
+         win = s.turn === 'b' ? 'c' : 'b'; 
+      } else if (s.stalemate) {
+         reason = 'stalemate';
+         win = null;
+      }
+
+      // 2. Logika backendowa (nadpisuje silnik, np. poddanie w trakcie mata)
+      if (s.game_over) {
+          if (s.reason) reason = s.reason; // 'resignation', 'agreement'
+          win = s.winner; // 'b', 'c', lub null
+      }
+
+      // Ustawiamy stan
+      if (reason) {
+          setIsCheckmate(true); // Używamy tej samej flagi co do pokazywania overlayu, lub nowej
+          setGameOverReason(reason);
+          setWinner(win);
+          setIncomingDrawOffer(null); // Czyścimy propozycję remisu jeśli gra się skończyła
+      } else {
+          // Reset jeśli nowa gra (lub sync)
+          setIsCheckmate(false);
+          setGameOverReason(null);
+          setWinner(null);
+      }
       
       // Legal moves
       const legals = s.legal_moves || [];
@@ -164,6 +198,24 @@ export default function ChessBoard({
 
     const unsubOpen = wsClient.on('open', () => setConnected(true));
     const unsubClose = wsClient.on('close', () => setConnected(false));
+
+    const unsubGameOver = wsClient.on('game_over', (msg) => {
+        if (msg.state) updateGameState(msg.state);
+    });
+
+    // 4. ODBIÓR PROPOZYCJI REMISU
+    const unsubDrawOffer = wsClient.on('draw_offer', (msg) => {
+        // Jeśli to ja wysłałem (np. echo), ignoruj (sprawdź po username jeśli dostępny)
+        // Zakładamy, że backend wysyła sender (nazwa).
+        if (msg.sender === username) return; 
+        setIncomingDrawOffer(msg.sender);
+    });
+
+    const unsubDrawRejected = wsClient.on('draw_rejected', () => {
+        alert("Przeciwnik odrzucił propozycję remisu.");
+    });
+
+    
 
     // 1. ODBIÓR STANU PRZY POŁĄCZENIU
     const unsubConnected = wsClient.on('connected', (msg) => {
@@ -212,9 +264,29 @@ export default function ChessBoard({
       unsubConnected(); 
       unsubMove(); 
       unsubLegal();
-      //try { wsClient.disconnect(); } catch (e) { /* ignore */ }
+      try { wsClient.disconnect(); } catch (e) { /* ignore */ }
     };
   }, []);
+
+  const handleResign = () => {
+      if (!confirm("Czy na pewno chcesz się poddać?")) return;
+      wsClient.send({ type: 'resign' });
+  };
+
+  const handleOfferDraw = () => {
+      wsClient.send({ type: 'offer_draw' });
+      alert("Wysłano propozycję remisu.");
+  };
+
+  const handleAcceptDraw = () => {
+      wsClient.send({ type: 'respond_draw', accept: true });
+      setIncomingDrawOffer(null);
+  };
+
+  const handleRejectDraw = () => {
+      wsClient.send({ type: 'respond_draw', accept: false });
+      setIncomingDrawOffer(null);
+  };
   
   // obliczamy mapę legalnych destynacji dla aktualnie zaznaczonego pola
   const legalDestinationsForSelected = useMemo(() => {
@@ -472,7 +544,7 @@ export default function ChessBoard({
   const cols = orientation === 'b' ? [0,1,2,3,4,5,6,7] : [7,6,5,4,3,2,1,0];
 
   // render planszy
-return (
+  return (
     <div className="game-container" style={{ padding: 12, display: 'flex', gap: 20, justifyContent: 'center', alignItems: 'flex-start', flexWrap: 'wrap' }}>
       
       {/* LEWA STRONA: PLANSZA */}
@@ -497,7 +569,6 @@ return (
         >
           {rows.map((r) => 
             cols.map((c) => {
-              // UWAGA: Pobieramy komórkę używając indeksów z mapowania (dla odwracania)
               const cell = board[r][c];
               
               const isLight = (r + c) % 2 === 0;
@@ -524,7 +595,7 @@ return (
               return (
                 <div
                   key={key}
-                  onClick={() => onSquareClick(r, c)} // onSquareClick używa logicznych r,c co jest OK
+                  onClick={() => onSquareClick(r, c)}
                   title={prettySquareName(r, c)}
                   style={{
                     width: 56,
@@ -534,13 +605,13 @@ return (
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    background: bg, // base background
+                    background: bg,
                     border: selectedHere ? '3px solid gold' : isCheckedKingHere ? '3px solid #ff4d4f' : 'none',
                     cursor: 'pointer',
                     position: 'relative'
                   }}
                 >
-                  {/* Marker legalnego ruchu (kropka lub kółko) */}
+                  {/* Marker legalnego ruchu */}
                   {isLegalDest && !piece && <div style={{width: 16, height: 16, background: 'rgba(0,0,0,0.2)', borderRadius: '50%'}} />}
                   {isLegalDest && piece && <div style={{position: 'absolute', width: 56, height: 56, border: '4px solid rgba(0,0,0,0.2)', borderRadius: '50%'}} />}
 
@@ -550,43 +621,45 @@ return (
                     piece && <div style={{ fontWeight: 700 }}>{piece}</div>
                   )}
 
-                  {/* Koordynaty na brzegach (opcjonalne) */}
+                  {/* Koordynaty na brzegach */}
                   {c === (orientation==='b'?0:7) && <span style={{position:'absolute', top:2, left:2, fontSize:10, color: isLight?'#2f7a46':'#f6f0d6', pointerEvents:'none'}}>{8-r}</span>}
                   {r === (orientation==='b'?7:0) && <span style={{position:'absolute', bottom:0, right:2, fontSize:10, color: isLight?'#2f7a46':'#f6f0d6', pointerEvents:'none'}}>{'abcdefgh'[c]}</span>}
                 </div>
               );
             })
           )}
-          {/* OVERLAY Z WYNIKIEM (NOWE) */}
-          {(isCheckmate || isStalemate) && (
+          
+          {/* OVERLAY Z WYNIKIEM (ZAKTUALIZOWANY) */}
+          {(gameOverReason) && (
               <div style={{
                   position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                  background: 'rgba(0,0,0,0.7)',
+                  background: 'rgba(0,0,0,0.85)',
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  color: '#fff', zIndex: 10
+                  color: '#fff', zIndex: 10, padding: 20, textAlign: 'center'
               }}>
-                  <h2 style={{fontSize: '2rem', marginBottom: 10}}>KONIEC GRY</h2>
-                  {isCheckmate && (
-                      <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#ff4d4f'}}>
-                          SZACH MAT!
-                          <div style={{fontSize: '1rem', marginTop: 5, color: '#fff'}}>
-                              Wygrały: {turn === 'b' ? 'Czarne' : 'Białe'} {/* Jeśli tura białych i jest mat, to znaczy że białe przegrały */}
-                          </div>
-                      </div>
-                  )}
-                  {isStalemate && (
-                      <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#faad14'}}>
-                          PAT (Remis)
-                      </div>
-                  )}
+                  <h2 style={{fontSize: '2rem', marginBottom: 5}}>KONIEC GRY</h2>
+                  
+                  {/* Powód końca gry */}
+                  <div style={{fontSize: '1.2rem', marginBottom: 10, fontStyle: 'italic', color: '#ddd'}}>
+                      {gameOverReason === 'checkmate' && "Szach-mat"}
+                      {gameOverReason === 'stalemate' && "Pat"}
+                      {gameOverReason === 'resignation' && "Poddanie się"}
+                      {gameOverReason === 'agreement' && "Remis za porozumieniem"}
+                  </div>
+
+                  {/* Kto wygrał */}
+                  <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: winner ? '#ff4d4f' : '#faad14'}}>
+                      {winner === 'b' ? 'WYGRAŁY BIAŁE' : winner === 'c' ? 'WYGRAŁY CZARNE' : 'REMIS'}
+                  </div>
+
                   <button 
                       onClick={() => navigate(-1)} 
                       style={{
-                          marginTop: 20, 
+                          marginTop: 25, 
                           padding: '12px 24px', 
                           fontSize: '1.1rem', 
                           cursor: 'pointer', 
-                          background: '#2f7a46', // Zielony kolor pasujący do planszy
+                          background: '#2f7a46',
                           color: '#fff',
                           border: 'none', 
                           borderRadius: 6,
@@ -614,8 +687,39 @@ return (
           <div style={{ marginTop: 15 }}>
             <strong>Status: </strong> 
             {connected ? <span style={{color:'green'}}>Połączono</span> : <span style={{color:'red'}}>Rozłączono</span>}
-            {isCheck && <div style={{color: 'crimson', fontWeight:'bold', marginTop: 4}}>SZACH!</div>}
+            {isCheck && !gameOverReason && <div style={{color: 'crimson', fontWeight:'bold', marginTop: 4}}>SZACH!</div>}
           </div>
+
+          {/* PRZYCISKI AKCJI (widoczne tylko dla graczy, gdy gra trwa) */}
+          {mySide && !gameOverReason && (
+              <div style={{ marginTop: 20, display: 'flex', gap: 10, flexDirection: 'column' }}>
+                  <button 
+                    onClick={handleOfferDraw}
+                    style={{ padding: '8px', cursor: 'pointer', background: '#faad14', border: 'none', borderRadius: 4, fontWeight: 'bold', color: '#000' }}>
+                    🤝 Zaproponuj remis
+                  </button>
+                  <button 
+                    onClick={handleResign}
+                    style={{ padding: '8px', cursor: 'pointer', background: '#ff4d4f', color: 'white', border: 'none', borderRadius: 4, fontWeight: 'bold' }}>
+                    🏳️ Poddaj się
+                  </button>
+              </div>
+          )}
+
+          {/* ALERT O PROPOZYCJI REMISU */}
+          {incomingDrawOffer && !gameOverReason && (
+              <div style={{ 
+                  marginTop: 15, padding: 10, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 4 
+              }}>
+                  <div style={{fontWeight: 'bold', marginBottom: 5, fontSize: '0.9rem'}}>
+                      Propozycja remisu od: {incomingDrawOffer}
+                  </div>
+                  <div style={{display: 'flex', gap: 5}}>
+                      <button onClick={handleAcceptDraw} style={{flex:1, cursor:'pointer', background:'#52c41a', color:'#fff', border:'none', padding:'4px', borderRadius:3, fontSize:'0.85rem'}}>Zgoda</button>
+                      <button onClick={handleRejectDraw} style={{flex:1, cursor:'pointer', background:'#ff4d4f', color:'#fff', border:'none', padding:'4px', borderRadius:3, fontSize:'0.85rem'}}>Odrzuć</button>
+                  </div>
+              </div>
+          )}
 
           <h4 style={{marginBottom: 5, marginTop: 15}}>Historia</h4>
           <div className="history-list" style={{ height: 200, overflowY: 'auto', background: '#fff', border: '1px solid #eee', padding: 5, fontFamily: 'monospace', fontSize: '0.9rem' }}>
@@ -625,7 +729,6 @@ return (
                       {i % 2 === 0 ? <span style={{color: '#888'}}>{(i/2)+1}.</span> : null} {m}
                   </span>
               ))}
-              {/* Dummy element do autoscrollowania */}
               <div ref={el => el && el.scrollIntoView({ behavior: 'smooth' })} />
           </div>
       </div>
@@ -635,7 +738,7 @@ return (
         <div
           id="promotion-popup"
           style={{
-            position: 'fixed', // Używamy fixed center żeby uniknąć problemów z pozycjonowaniem
+            position: 'fixed',
             top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
             zIndex: 9999,
             padding: 10,

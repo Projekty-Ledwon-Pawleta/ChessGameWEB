@@ -8,6 +8,7 @@ export default function HomePage() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [loadingUser, setLoadingUser] = useState(true);
+  const [matching, setMatching] = useState(false);
 
   // pobierz info o użytkowniku jeśli mamy access_token
   useEffect(() => {
@@ -71,6 +72,59 @@ export default function HomePage() {
     navigate('/'); // zostań na home lub kieruj gdzie chcesz
   };
 
+  const handleQuickMatch = () => {
+    if (!user) {
+        navigate('/login');
+        return;
+    }
+    setMatching(true);
+
+    // 1. Połącz z lobby (jeśli nie jesteśmy połączeni)
+    try {
+        wsClient.connect({ room: "lobby" });
+    } catch (e) {
+        console.error(e);
+        setMatching(false);
+        return;
+    }
+
+    // 2. Nasłuchuj na "joined" lub błędy
+    const unsubJoined = wsClient.on("joined", (msg) => {
+        if (msg.success && msg.room) {
+            // Sprzątamy listenery
+            unsubJoined();
+            // Przekierowanie do gry
+            navigate(`/play/${encodeURIComponent(msg.room.name)}`);
+        } else {
+            setMatching(false);
+            alert("Nie udało się dołączyć: " + (msg.message || "Błąd serwera"));
+        }
+    });
+
+    // Opcjonalnie obsługa błędu połączenia
+    const unsubError = wsClient.on("error", () => {
+        setMatching(false);
+        alert("Błąd połączenia z serwerem.");
+    });
+
+    // 3. Po otwarciu połączenia wyślij 'quick_match'
+    // Jeśli połączenie już było otwarte, on('open') może się nie wykonać, więc sprawdzamy stan
+    if (wsClient.connected) {
+        wsClient.send({ type: "quick_match" });
+    } else {
+        const unsubOpen = wsClient.on("open", () => {
+            wsClient.send({ type: "quick_match" });
+            unsubOpen(); // jednorazowo
+        });
+    }
+
+    // Bezpiecznik: jeśli nic się nie stanie przez 5 sekund, zresetuj guzik
+    setTimeout(() => {
+        if (matching) setMatching(false);
+        // Tu można też zdjąć listenery, jeśli chcesz być bardzo dokładny
+    }, 5000);
+  };
+
   const authNav = (
     <>
       <Link className="nav__link" to="/">Strona główna</Link>
@@ -85,7 +139,6 @@ export default function HomePage() {
       <Link className="nav__link" to="/">Strona główna</Link>
       <Link className="nav__link" to="/login">Zaloguj</Link>
       <Link className="nav__link" to="/register">Zarejestruj</Link>
-      <Link className="btn btn--primary" to="/play">Wejdź do gry</Link>
     </>
   );
 
@@ -122,14 +175,19 @@ export default function HomePage() {
             <div className="hero__actions">
               {user ? (
                 <>
-                  <Link className="btn btn--primary" to="/play">Rozpocznij grę</Link>
+                  <button 
+                    className="btn btn--primary" 
+                    onClick={handleQuickMatch} 
+                    disabled={matching}
+                  >
+                    {matching ? "Szukam..." : "Rozpocznij grę"}
+                  </button>
                   <Link className="btn" to="/profile">Mój profil</Link>
                 </>
               ) : (
                 <>
                   <Link className="btn btn--primary" to="/login">Zaloguj</Link>
                   <Link className="btn" to="/register">Zarejestruj</Link>
-                  <Link className="btn btn--muted" to="/play">Graj demo</Link>
                 </>
               )}
             </div>
@@ -147,7 +205,7 @@ export default function HomePage() {
           <div className="features__grid">
             <div className="feature-card">
               <h3>Proste dołączenie</h3>
-              <p>Stwórz konto lub dołącz jako gość i od razu wyszukaj pokój.</p>
+              <p>Stwórz konto i od razu wyszukaj pokój.</p>
             </div>
 
             <div className="feature-card">
@@ -165,18 +223,23 @@ export default function HomePage() {
         <section className="cta">
           <div>
             <h3>Gotowy zagrać?</h3>
-            <p>Zaloguj się, stwórz pokój i zaproś znajomego — albo skorzystaj z szybkiego dopasowania.</p>
+            <p>Zaloguj się, stwórz pokój i zaproś znajomego</p>
           </div>
           <div className="cta__actions">
             {user ? (
               <>
-                <Link className="btn btn--primary" to="/play">Szybkie dopasowanie</Link>
+                <button 
+                    className="btn btn--primary" 
+                    onClick={handleQuickMatch}
+                    disabled={matching}
+                >
+                    {matching ? "Szukam..." : "Szybkie dopasowanie"}
+                </button>
                 <button className="btn" onClick={() => navigate('/profile')}>Mój profil</button>
               </>
             ) : (
               <>
                 <Link className="btn btn--primary" to="/register">Zarejestruj konto</Link>
-                <Link className="btn" to="/play">Szybkie dopasowanie</Link>
               </>
             )}
           </div>

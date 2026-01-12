@@ -4,12 +4,14 @@ import asyncio
 import functools
 import logging
 import traceback
+import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer, AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth import get_user_model
 from .models import Game, Room
 from .engine_adapter import EngineWrapper
+from django.db.models import Count
 
 User = get_user_model()
 
@@ -28,6 +30,18 @@ if not logger.handlers:
     logger.addHandler(sh)
 
 # --- DB HELPERS ---
+
+@database_sync_to_async
+def find_open_room_for_quick_match(user_id):
+    possible_rooms = Room.objects.annotate(p_count=Count('players')).filter(
+        status=Room.STATUS_OPEN,
+        password_hash='',
+        p_count=1
+    ).exclude(players__id=user_id)
+
+    if possible_rooms.exists():
+        return possible_rooms.first()
+    return None
 
 @database_sync_to_async
 def get_all_rooms_serialized():
@@ -236,6 +250,33 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             else:
                 await self.send_json({"type":"error","detail": payload_or_err})
         
+        elif msg_type == "resign":
+            await self._handle_resign(user)
+
+        # --- NOWE: PROPOZYCJA REMISU ---
+        elif msg_type == "offer_draw":
+            # Przesyłamy propozycję do przeciwnika (nie zapisujemy w stanie trwałym, to ulotne)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    "type": "draw_offered",
+                    "sender": str(user),
+                    "sender_id": user.id
+                }
+            )
+
+        # --- NOWE: ODPOWIEDŹ NA REMIS (accept/reject) ---
+        elif msg_type == "respond_draw":
+            accept = data.get("accept", False)
+            if accept:
+                await self._handle_draw_agreed()
+            else:
+                # Opcjonalnie: powiadom drugiego gracza o odrzuceniu
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {"type": "draw_rejected", "sender": str(user)}
+                )
+
         elif msg_type == "sync_request":
             state = await self._get_state()
             await self.send_json({"type":"sync", "state": state})
@@ -257,6 +298,89 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
     
     async def player_joined(self, event): 
         await self.send_json({ "type": "player_joined", "user": event["user"] })
+
+    async def _handle_resign(self, user):
+        """Gracz się poddaje -> przeciwnik wygrywa."""
+        # 1. Pobierz aktualny stan
+        game = await database_sync_to_async(Game.objects.get)(room_name=self.room_name)
+        state_dict = json.loads(game.state) if game.state else {}
+
+        # Jeśli gra już skończona, ignoruj
+        if state_dict.get("game_over"):
+            return
+
+        # 2. Ustal kolory
+        room = await database_sync_to_async(Room.objects.get)(name=self.room_name)
+        players = await database_sync_to_async(list)(room.players.all().order_by('id'))
+        
+        # Zakładamy: players[0]=Białe, players[1]=Czarne (zgodnie z logiką z poprzednich plików)
+        # Ustalmy kto wygrał
+        winner_color = None
+        if len(players) >= 2:
+            if user.id == players[0].id:
+                winner_color = 'c' # Biały się poddał -> czarny wygrywa
+            elif user.id == players[1].id:
+                winner_color = 'b' # Czarny się poddał -> biały wygrywa
+
+        # 3. Aktualizuj stan JSON
+        state_dict['game_over'] = True
+        state_dict['winner'] = winner_color
+        state_dict['reason'] = 'resignation' # powód końca gry
+        
+        # Zapisz w DB
+        game.state = json.dumps(state_dict)
+        await database_sync_to_async(game.save)()
+
+        # 4. Broadcast stanu
+        await self.channel_layer.group_send(
+            self.group_name,
+            {"type": "broadcast_game_over", "state": state_dict}
+        )
+
+    async def _handle_draw_agreed(self):
+        """Gracze zgodzili się na remis."""
+        game = await database_sync_to_async(Game.objects.get)(room_name=self.room_name)
+        state_dict = json.loads(game.state) if game.state else {}
+
+        if state_dict.get("game_over"):
+            return
+
+        # Aktualizacja stanu
+        state_dict['game_over'] = True
+        state_dict['winner'] = None # Remis
+        state_dict['reason'] = 'agreement' # draw by agreement
+
+        game.state = json.dumps(state_dict)
+        await database_sync_to_async(game.save)()
+
+        await self.channel_layer.group_send(
+            self.group_name,
+            {"type": "broadcast_game_over", "state": state_dict}
+        )
+
+    # --- EVENT HANDLERS (do wysyłania JSON do klienta) ---
+
+    async def draw_offered(self, event):
+        # Wysyłamy info o propozycji remisu.
+        # Frontend musi sprawdzić, czy to "ja" wysłałem, czy przeciwnik.
+        await self.send_json({
+            "type": "draw_offer",
+            "sender": event["sender"],
+            "sender_id": event["sender_id"]
+        })
+
+    async def draw_rejected(self, event):
+        await self.send_json({
+            "type": "draw_rejected",
+            "sender": event["sender"]
+        })
+
+    async def broadcast_game_over(self, event):
+        # Nadpisujemy stan na froncie nowym stanem z flagą game_over
+        await self.send_json({
+            "type": "game_over",
+            "state": event["state"]
+        })
 
     # Helpery Sync/Async (bez zmian logiki gry)
     def _apply_move_sync(self, move_data: dict):
@@ -341,6 +465,49 @@ class LobbyConsumer(AsyncJsonWebsocketConsumer):
         if typ == 'lobby_subscribe':
             rooms = await get_all_rooms_serialized()
             await self.send_json({'type': 'room_list', 'rooms': rooms})
+            return
+
+        if typ == 'quick_match':
+            if user.is_anonymous:
+                await self.send_json({'type': 'error', 'message': 'auth required'})
+                return
+
+            # 1. Próba znalezienia istniejącego pokoju
+            existing_room = await find_open_room_for_quick_match(user.id)
+
+            if existing_room:
+                # Próbujemy dołączyć używając istniejącej logiki
+                res = await try_join_room_db(existing_room.name, user.id, "")
+                if res['success']:
+                    # Udało się dołączyć
+                    await self.channel_layer.group_send("lobby", {
+                        "type": "lobby.room_update",
+                        "room": res['room']
+                    })
+                    await self.send_json({'type': 'joined', 'room': res['room'], 'success': True})
+                    return
+                # Jeśli z jakiegoś powodu się nie udało (np. ułamek sekundy temu ktoś wbił), 
+                # kod przejdzie dalej i stworzy nowy pokój.
+
+            # 2. Tworzenie nowego pokoju (jeśli nie znaleziono lub dołączenie nie wyszło)
+            # Generujemy losową nazwę, np. QuickMatch_a1b2c3d4
+            random_suffix = uuid.uuid4().hex[:8]
+            name = f"QuickMatch_{random_suffix}"
+            
+            room_obj = await create_room_db(name, user.id, "") # puste hasło
+
+            # Broadcast do lobby
+            await self.channel_layer.group_send("lobby", {
+                "type": "lobby.room_created",
+                "room": room_obj
+            })
+            
+            # Info dla gracza, że dołączył (do swojego pokoju)
+            await self.send_json({
+                'type': 'joined', 
+                'room': room_obj, 
+                'success': True
+            })
             return
 
         if typ == 'create_room':
