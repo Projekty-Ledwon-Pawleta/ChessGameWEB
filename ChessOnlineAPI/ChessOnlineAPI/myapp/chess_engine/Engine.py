@@ -7,8 +7,6 @@ from .pieces.Queen import Queen
 from .utils.Move import Move
 from .utils.Castling import CastlingRules
 
-if_now_en_passant = ()
-
 class Board:
     def __init__(self):
         self.board = [
@@ -32,10 +30,10 @@ class Board:
         self.castling_history = [CastlingRules(self.castling_move.cH, self.castling_move.cK, self.castling_move.bH, self.castling_move.bK)]
         self.you = "B"
         self.opponent = "C"
+        self.en_passant_pos = ()
 
     def update_moves(self):
-        global if_now_en_passant
-        temp_en_passant_rules = if_now_en_passant
+        temp_en_passant_rules = self.en_passant_pos
         temp_castling_rules = CastlingRules(self.castling_move.cH, self.castling_move.cK, self.castling_move.bH, self.castling_move.bK)
 
         moves = self.generate_moves()
@@ -77,7 +75,7 @@ class Board:
             self.checkmate = False
             self.stalemate = False
 
-        if_now_en_passant = temp_en_passant_rules
+        self.en_passant_pos = temp_en_passant_rules        
         self.castling_move = temp_castling_rules
 
         for i in range(len(moves)):
@@ -165,7 +163,6 @@ class Board:
 
 
     def undo_move(self):
-        global if_now_en_passant
         if len(self.move_history) > 0:
 
             move = self.move_history.pop()
@@ -187,10 +184,10 @@ class Board:
             if move.czy_en_passant:
                 self.board[move.dest_x][move.dest_y] = None
                 self.board[move.start_x][move.dest_y] = move.caught_figure
-                if_now_en_passant = (move.dest_x, move.dest_y)
+                self.en_passant_pos = (move.dest_x, move.dest_y)
 
             if move.moved_figure.name == 'Pionek' and (move.start_x - move.dest_x == -2 or move.start_x - move.dest_x == 2):
-                if_now_en_passant = ()
+                self.en_passant_pos = ()
 
 
             self.castling_history.pop()
@@ -249,15 +246,19 @@ class Board:
         possible_moves = []
         for r in range(len(self.board)):
             for c in range(len(self.board[r])):
-                if self.board[r][c] is not None:
-                    if (self.board[r][c].color == 'Bialy' and self.white_to_move) or (self.board[r][c].color == 'Czarny' and not self.white_to_move):
-                        possible_moves += self.board[r][c].generate_possible_moves(self.board)
-                    self.board[r][c].move_list = []
+                piece = self.board[r][c]
+                if piece is not None:
+                    if (piece.color == 'Bialy' and self.white_to_move) or (piece.color == 'Czarny' and not self.white_to_move):
+                        if piece.name == 'Pionek':
+                            possible_moves += piece.generate_possible_moves(self.board, self.en_passant_pos)
+                        else:
+                            possible_moves += piece.generate_possible_moves(self.board)
+                            
+                    piece.move_list = []
 
         return possible_moves
 
     def make_move(self, move):
-            global if_now_en_passant
             self.board[move.start_x][move.start_y].row = move.dest_x
             self.board[move.start_x][move.start_y].column = move.dest_y
             self.board[move.start_x][move.start_y] = None
@@ -283,9 +284,9 @@ class Board:
 
 
             if move.moved_figure.name == 'Pionek' and (move.dest_x - move.start_x == -2 or move.dest_x - move.start_x == 2):
-                if_now_en_passant = ((move.start_x + move.dest_x) // 2, move.start_y)
+                self.en_passant_pos = ((move.start_x + move.dest_x) // 2, move.start_y)
             else:
-                if_now_en_passant = ()
+                self.en_passant_pos = ()
 
 
             if move.castling:

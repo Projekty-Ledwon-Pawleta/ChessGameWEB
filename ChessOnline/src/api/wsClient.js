@@ -31,71 +31,93 @@ class WSClient {
 
     if (!this.room) throw new Error('room required to connect');
 
-    // zamknij stare połączenie jeśli jest
+    // 1. Zabezpieczenie przed nadpisywaniem:
+    // Zanim otworzymy nowe, zamykamy stare i CZYŚCIMY jego callbacki,
+    // żeby stare onclose nie odpaliło się, gdy my już tworzymy nowe połączenie.
     if (this.ws) {
+      // Usuwamy listenery ze starego socketa, żeby nie śmieciły
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      this.ws.onopen = null;
+      
       try { this.ws.close(); } catch(e) {}
+      this.ws = null;
     }
 
     const url = this.buildUrl(this.room);
-
     if (!url) {
       this.emit('auth_required', { message: 'No access token found' });
       return;
     }
 
-    // Jeśli nie ma tokena — emitujemy event i nie łączymy (możesz zmienić żeby i tak próbował)
     const access = localStorage.getItem('access_token');
     if (!access) {
       this.emit('auth_required', { message: 'No access token found' });
       return;
     }
 
-    this.ws = new WebSocket(url);
+    // Tworzymy nową instancję
+    const socket = new WebSocket(url);
+    this.ws = socket;
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      // Sprawdź czy ten socket to nadal "TEN" aktualny socket
+      if (this.ws !== socket) return; 
+
       this.connected = true;
       this.emit('open');
-      // czyścisz ewentualny timer reconnect
       if (this.reconnectTimeout) {
         clearTimeout(this.reconnectTimeout);
         this.reconnectTimeout = null;
       }
     };
 
-    this.ws.onmessage = (ev) => {
+    socket.onmessage = (ev) => {
+      if (this.ws !== socket) return; // Ignoruj wiadomości ze starych socketów
+
       let msg;
       try { msg = JSON.parse(ev.data); } catch (e) { this.emit('malformed', ev.data); return; }
       this.emit('message', msg);
       if (msg.type) this.emit(msg.type, msg);
     };
 
-    this.ws.onclose = (ev) => {
+    socket.onclose = (ev) => {
+      // KLUCZOWA ZMIANA: Ignoruj zamknięcie, jeśli this.ws wskazuje już na inny (nowszy) socket
+      if (this.ws !== socket) return;
+
       this.connected = false;
       this.ws = null;
       this.emit('close', ev);
 
-      // jeśli zamknięcie było spowodowane brakiem autoryzacji, backend może zwrócić specyficzny code
-      // np. w consumerze chcesz zamykać z code=4001 dla auth failure — wtedy nie reconnectujemy
       const code = ev && ev.code;
       if (code === 4001) {
         this.emit('auth_failed', ev);
         return;
       }
 
-      // reconnect
+      // Reconnect logic
       this.reconnectTimeout = setTimeout(() => {
+        // Ponowne sprawdzenie tożsamości przed reconnectem
+        if (this.ws !== null && this.ws !== socket) return; 
+        
         this.emit('reconnect', { room: this.room });
-        // przy reconnect pobieramy z localStorage najnowszy token dzięki buildUrl()
         this.connect({ host: this.host, room: this.room });
       }, this.reconnectDelay);
     };
 
-    this.ws.onerror = (err) => { this.emit('error', err); };
+    socket.onerror = (err) => { 
+        if (this.ws !== socket) return;
+        this.emit('error', err); 
+    };
   }
 
   disconnect() {
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-    if (this.ws) { this.ws.close(); this.ws = null; }
+    if (this.ws) { 
+        this.ws.onclose = null; 
+        try { this.ws.close(); } catch(e) {} 
+        this.ws = null; }
     this.connected = false;
     this.emit('close', { by: 'client' });
   }

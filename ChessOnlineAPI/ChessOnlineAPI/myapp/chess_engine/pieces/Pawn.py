@@ -11,9 +11,8 @@ class Pawn(Figure):
         elif self.color == 'Czarny' and self.row == 7:
             self.promotion = True
 
-    def generate_possible_moves(self, board):
+    def generate_possible_moves(self, board, en_passant_pos=None):
          from myapp.chess_engine.utils.Move import Move
-         from ..Engine import if_now_en_passant
 
          if self.color == 'Bialy':
             if board[self.row - 1][self.column] is None:
@@ -25,14 +24,14 @@ class Pawn(Figure):
             if self.column - 1 >= 0:
                 if board[self.row - 1][self.column - 1] is not None and board[self.row - 1][self.column - 1].color != 'Bialy':
                     self.move_list.append(Move((self.column, self.row), (self.column - 1, self.row - 1), board))
-                elif (self.row - 1, self.column - 1) == if_now_en_passant:
+                elif (self.row - 1, self.column - 1) == en_passant_pos:
                     self.move_list.append(
                         Move((self.column, self.row), (self.column - 1, self.row - 1), board, castling=False,
                              en_passant=True))
             if self.column + 1 <= 7:
                 if board[self.row - 1][self.column + 1] is not None and board[self.row - 1][self.column + 1].color != 'Bialy':
                     self.move_list.append(Move((self.column, self.row), (self.column + 1, self.row - 1), board))
-                elif (self.row - 1, self.column + 1) == if_now_en_passant:
+                elif (self.row - 1, self.column + 1) == en_passant_pos:
                     self.move_list.append(
                         Move((self.column, self.row), (self.column + 1, self.row - 1), board, castling=False,
                              en_passant=True))
@@ -47,14 +46,14 @@ class Pawn(Figure):
                 if self.column - 1 >= 0:
                     if board[self.row + 1][self.column - 1] is not None and board[self.row + 1][self.column - 1].color != 'Czarny':
                         self.move_list.append(Move((self.column, self.row), (self.column - 1, self.row + 1), board))
-                    elif (self.row + 1, self.column - 1) == if_now_en_passant:
+                    elif (self.row + 1, self.column - 1) == en_passant_pos:
                         self.move_list.append(
                             Move((self.column, self.row), (self.column - 1, self.row + 1), board, castling=False,
                                  en_passant=True))
                 if self.column + 1 <= 7:
                     if board[self.row + 1][self.column + 1] is not None and board[self.row + 1][self.column + 1].color != 'Czarny':
                         self.move_list.append(Move((self.column, self.row), (self.column + 1, self.row + 1), board))
-                    elif (self.row + 1, self.column + 1) == if_now_en_passant:
+                    elif (self.row + 1, self.column + 1) == en_passant_pos:
                         self.move_list.append(
                             Move((self.column, self.row), (self.column + 1, self.row + 1), board, castling=False,
                                  en_passant=True))

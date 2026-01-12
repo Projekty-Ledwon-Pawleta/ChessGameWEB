@@ -3,6 +3,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import pieceMap from './pieceMap';
 import * as chessValidator from './validate_moves.js';
 import wsClient from '../api/wsClient';
+import { useNavigate } from "react-router-dom";
 
 // helpery
 function emptyBoard() {
@@ -93,9 +94,10 @@ function sanForMove(cellValue, sr, sc, r, c, board) {
 export default function ChessBoard({ 
     defaultRoom = 'testroom', 
     wsHost = undefined, 
-    username = null,      // "Kto ja jestem?"
-    initialPlayers = []   // ["PlayerWhite", "PlayerBlack"]
+    username = null,      
+    initialPlayers = []   
   }) {
+  const navigate = useNavigate();
   const [board, setBoard] = useState(emptyBoard()); // board pochodzi z serwera
   const [selected, setSelected] = useState(null); // {r,c}
   const [turn, setTurn] = useState(null); // opcjonalnie: 'b' lub 'c' — ustawiany z serwera
@@ -113,6 +115,9 @@ export default function ChessBoard({
   const [promotionPos, setPromotionPos] = useState(null);
   const [isCheck, setIsCheck] = useState(false);
   const [checkedKingPos, setCheckedKingPos] = useState(null);
+  const [isCheckmate, setIsCheckmate] = useState(false); 
+  const [isStalemate, setIsStalemate] = useState(false);
+
   const boardRef = useRef(null);
 
   const mySide = useMemo(() => {
@@ -128,12 +133,34 @@ export default function ChessBoard({
     else setOrientation('b');
   }, [mySide]);
 
+  const shouldConnect = useRef(true);
+
   useEffect(() => {
     try {
       wsClient.connect({ host: wsHost, room: defaultRoom });
     } catch (e) {
       console.warn('wsClient.connect error:', e);
     }
+
+    const updateGameState = (s) => {
+      if (!s) return;
+      if (s.board) setBoard(s.board);
+      if (s.turn) setTurn(s.turn);
+      
+      // Flagi stanu
+      setIsCheck(Boolean(s.check));
+      setIsCheckmate(Boolean(s.checkmate));
+      setIsStalemate(Boolean(s.stalemate));
+      
+      // Legal moves
+      const legals = s.legal_moves || [];
+      setLegalMoves(legals);
+
+      // History
+      if (s.moves && Array.isArray(s.moves)) {
+          setHistory(s.moves);
+      }
+    };
 
     const unsubOpen = wsClient.on('open', () => setConnected(true));
     const unsubClose = wsClient.on('close', () => setConnected(false));
@@ -143,20 +170,7 @@ export default function ChessBoard({
       console.log("Connected msg:", msg);
       if (msg.state) {
           const s = msg.state.state || msg.state;
-          
-          if (s.board) setBoard(s.board);
-          if (s.turn) setTurn(s.turn);
-          if (s.check) setIsCheck(s.check);
-          
-          // Legal moves
-          const legals = msg.state.legal_moves || s.legal_moves || [];
-          setLegalMoves(legals);
-
-          // --- NOWE: Historia prosto z serwera ---
-          // Serwer zwraca gotową tablicę np. ["e4", "e5", "Sf3"]
-          if (s.moves && Array.isArray(s.moves)) {
-              setHistory(s.moves);
-          }
+          updateGameState(s);
       }
       if (msg.players && Array.isArray(msg.players)) {
           setPlayers(msg.players);
@@ -169,38 +183,36 @@ export default function ChessBoard({
       
       const moveData = msg.move || {};
       const s = moveData.state || msg.state || {}; // fallback
-      
       const stateObj = s.state || s; 
       
-      // Update board/turn/check
-      if (stateObj.board) setBoard(stateObj.board);
-      if (stateObj.turn) setTurn(stateObj.turn);
-      setIsCheck(Boolean(stateObj.check));
+      // --- TU BYŁ BŁĄD: Brakowało wywołania updateGameState ---
+      updateGameState(stateObj); 
+      // --------------------------------------------------------
 
-      // Update legal moves
-      const legals = moveData.legal_moves || stateObj.legal_moves || [];
-      setLegalMoves(legals);
-
-      // --- NOWE: Aktualizacja historii z tablicy serwera ---
-      // Zamiast dodawać pojedynczy ruch, podmieniamy całą tablicę.
-      // To automatycznie naprawia problem duplikatów i formatowania.
-      if (stateObj.moves && Array.isArray(stateObj.moves)) {
-          setHistory(stateObj.moves);
-      }
+      // Czasami legal_moves są bezpośrednio w moveData, a nie w state
+      if (moveData.legal_moves) setLegalMoves(moveData.legal_moves);
     });
 
     const unsubLegal = wsClient.on('legal_moves', (msg) => {
-       console.log("msg", msg)
+       // console.log("Legal moves msg", msg);
        const movesFromMsg = msg?.moves ?? msg?.legal_moves ?? msg?.state?.state?.legal_moves ?? [];
        if (Array.isArray(movesFromMsg)) setLegalMoves(movesFromMsg);
        
-       const checkFlag = msg?.state?.state?.check ?? msg?.state?.check ?? msg?.check ?? false;
-       setIsCheck(Boolean(checkFlag));
+       const s = msg?.state?.state || msg?.state || {};
+       if (s.check !== undefined) setIsCheck(Boolean(s.check));
+       if (s.checkmate !== undefined) setIsCheckmate(Boolean(s.checkmate));
+       if (s.stalemate !== undefined) setIsStalemate(Boolean(s.stalemate));
     });
 
     return () => {
-      unsubOpen(); unsubClose(); unsubConnected(); unsubMove(); unsubLegal();
-      try { wsClient.disconnect(); } catch (e) { /* ignore */ }
+      // Cleanup function
+      shouldConnect.current = false; // Reset flagi (opcjonalnie, zależy od cyklu życia)
+      unsubOpen(); 
+      unsubClose(); 
+      unsubConnected(); 
+      unsubMove(); 
+      unsubLegal();
+      //try { wsClient.disconnect(); } catch (e) { /* ignore */ }
     };
   }, []);
   
@@ -295,8 +307,9 @@ export default function ChessBoard({
   }, [board, isCheck, turn]);
 
   function onSquareClick(r, c) {
-
     if (mySide && turn !== mySide) return;
+
+    if (isCheckmate || isStalemate) return;
 
     const piece = board[r] && board[r][c];
 
@@ -543,6 +556,46 @@ return (
                 </div>
               );
             })
+          )}
+          {/* OVERLAY Z WYNIKIEM (NOWE) */}
+          {(isCheckmate || isStalemate) && (
+              <div style={{
+                  position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+                  background: 'rgba(0,0,0,0.7)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  color: '#fff', zIndex: 10
+              }}>
+                  <h2 style={{fontSize: '2rem', marginBottom: 10}}>KONIEC GRY</h2>
+                  {isCheckmate && (
+                      <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#ff4d4f'}}>
+                          SZACH MAT!
+                          <div style={{fontSize: '1rem', marginTop: 5, color: '#fff'}}>
+                              Wygrały: {turn === 'b' ? 'Czarne' : 'Białe'} {/* Jeśli tura białych i jest mat, to znaczy że białe przegrały */}
+                          </div>
+                      </div>
+                  )}
+                  {isStalemate && (
+                      <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: '#faad14'}}>
+                          PAT (Remis)
+                      </div>
+                  )}
+                  <button 
+                      onClick={() => navigate(-1)} 
+                      style={{
+                          marginTop: 20, 
+                          padding: '12px 24px', 
+                          fontSize: '1.1rem', 
+                          cursor: 'pointer', 
+                          background: '#2f7a46', // Zielony kolor pasujący do planszy
+                          color: '#fff',
+                          border: 'none', 
+                          borderRadius: 6,
+                          fontWeight: 'bold'
+                      }}
+                  >
+                      Powrót do lobby
+                  </button>
+              </div>
           )}
         </div>
       </div>
