@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import '../styles/home.css';
 import wsClient from "../api/wsClient"; // jeśli nie używasz wsClient, usuń ten import
 
+import chessboardImg from '../assets/chessboard.png';
+
 export default function HomePage() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -194,8 +196,25 @@ export default function HomePage() {
           </div>
 
           <aside className="hero__preview">
-            <div className="board-preview">
-              <div className="board-preview__placeholder">Podgląd planszy<br/>tu (ChessBoard)</div>
+            <div className="board-preview" style={{ 
+                display: 'flex', 
+                justifyContent: 'center', 
+                alignItems: 'center',
+                padding: 10
+            }}>
+                {/* 2. ZAMIENIONA SEKCJA - OBRAZEK STATYCZNY */}
+                <img 
+                    src={chessboardImg} 
+                    alt="Przykładowa plansza" 
+                    style={{
+                        width: '100%',            // Dopasuj szerokość do kontenera
+                        maxWidth: '450px',        // Nie pozwól, by był gigantyczny na dużych ekranach
+                        height: 'auto',           // Zachowaj proporcje
+                        borderRadius: '8px',      // Ładne rogi
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.3)', // Cień dla głębi
+                        border: '5px solid #4a3c31' // Ramka pasująca do motywu
+                    }}
+                />
             </div>
           </aside>
         </section>

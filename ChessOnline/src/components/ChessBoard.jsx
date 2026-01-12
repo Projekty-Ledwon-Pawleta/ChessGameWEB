@@ -211,11 +211,29 @@ export default function ChessBoard({
         setIncomingDrawOffer(msg.sender);
     });
 
-    const unsubDrawRejected = wsClient.on('draw_rejected', () => {
+    const unsubDrawRejected = wsClient.on('draw_rejected', (msg) => {
+        // POPRAWKA: Sprawdzamy, czy to my odrzuciliśmy.
+        // Jeśli msg.sender to moja nazwa użytkownika, to nie wyświetlam alertu samemu sobie.
+        if (msg.sender === username) return;
+
         alert("Przeciwnik odrzucił propozycję remisu.");
     });
 
-    
+    const unsubPlayerJoined = wsClient.on('player_joined', (msg) => {
+        if (msg.user) {
+            setPlayers(prev => {
+                // Jeśli ten user już jest na liście, nic nie rób
+                if (prev.includes(msg.user)) return prev;
+                
+                // Dodajemy nowego gracza do listy
+                // Zakładamy, że pierwszy to host (Białe), drugi to dołączający (Czarne)
+                return [...prev, msg.user];
+            });
+            
+            // Opcjonalnie: Wyświetl toast/powiadomienie
+            console.log("Gracz dołączył:", msg.user);
+        }
+    });
 
     // 1. ODBIÓR STANU PRZY POŁĄCZENIU
     const unsubConnected = wsClient.on('connected', (msg) => {
@@ -258,12 +276,16 @@ export default function ChessBoard({
 
     return () => {
       // Cleanup function
-      shouldConnect.current = false; // Reset flagi (opcjonalnie, zależy od cyklu życia)
+      shouldConnect.current = false; 
       unsubOpen(); 
       unsubClose(); 
       unsubConnected(); 
+      unsubPlayerJoined(); // <--- DODAJ TO
       unsubMove(); 
       unsubLegal();
+      unsubGameOver();
+      unsubDrawOffer();
+      unsubDrawRejected();
       try { wsClient.disconnect(); } catch (e) { /* ignore */ }
     };
   }, []);
