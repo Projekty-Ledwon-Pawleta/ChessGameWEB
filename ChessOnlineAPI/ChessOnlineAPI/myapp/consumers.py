@@ -3,6 +3,7 @@ import json
 import asyncio
 import functools
 import logging
+import time
 import traceback
 import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer, AsyncJsonWebsocketConsumer
@@ -68,7 +69,10 @@ def create_room_db(name, host_id, password):
     room.players.add(host)
     
     # Tworzymy od razu świeży obiekt Game, żeby był gotowy
-    Game.objects.create(room_name=name, state=EngineWrapper.get_initial_state())
+    Game.objects.create(
+        room_name=name, 
+        state=EngineWrapper.get_initial_state(),
+        white_player=host)
 
     return {
         'name': room.name,
@@ -102,10 +106,14 @@ def try_join_room_db(name, user_id, password):
     user = User.objects.get(id=user_id)
     room.players.add(user)
     
-    # Aktualizacja statusu jeśli pełny
-    if room.players.count() >= 2:
-        # Opcjonalnie: zmiana statusu na PLAYING
-        pass 
+    try:
+        game = Game.objects.get(room_name=name)
+        # Jeśli nie ma czarnego gracza i dołączający to nie jest ten sam co biały
+        if not game.black_player and game.white_player != user:
+            game.black_player = user
+            game.save(update_fields=['black_player'])
+    except Game.DoesNotExist:
+        pass
 
     return {'success': True, 'room': _serialize_room(room)}
 
@@ -142,11 +150,75 @@ def _serialize_room(room):
     }
 
 
+@database_sync_to_async
+def check_game_timeout(room_name):
+    """
+    Sprawdza, czy czas gracza na turze się skończył.
+    Jeśli tak -> aktualizuje stan w bazie i zwraca nowy stan.
+    Jeśli nie -> zwraca None.
+    """
+    try:
+        game = Game.objects.get(room_name=room_name)
+        if not game.state:
+            return None
+            
+        state = json.loads(game.state)
+        
+        # Jeśli gra już się skończyła, nic nie rób
+        if state.get("game_over"):
+            return None
+
+        # Pobierz dane o czasie
+        turn = state.get("turn", "b")
+        last_move_ts = state.get("last_move_timestamp", time.time())
+        moves_history = state.get("moves", [])
+        
+        # Czas nie płynie przed pierwszym ruchem
+        if len(moves_history) == 0:
+            return None
+
+        now = time.time()
+        elapsed = now - last_move_ts
+        
+        timeout_occurred = False
+        
+        # Sprawdzamy czy czas minął (z małym buforem np. 0.5s na lagi)
+        if turn == 'b':
+            remaining = state.get("white_time", 600) - elapsed
+            if remaining <= 0:
+                state["white_time"] = 0
+                state["winner"] = "c" # Wygrywają czarne
+                timeout_occurred = True
+        else:
+            remaining = state.get("black_time", 600) - elapsed
+            if remaining <= 0:
+                state["black_time"] = 0
+                state["winner"] = "b" # Wygrywają białe
+                timeout_occurred = True
+        
+        if timeout_occurred:
+            state["game_over"] = True
+            state["reason"] = "timeout"
+            # Zapisujemy zmianę w bazie
+            game.state = json.dumps(state)
+            game.save(update_fields=["state", "updated_at"])
+            return state
+            
+        return None
+
+    except Game.DoesNotExist:
+        return None
+    except Exception as e:
+        print(f"Error checking timeout: {e}")
+        return None
+
+
 # --- CONSUMERS ---
 
 class ChessGameConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.room_name = self.scope['url_route']['kwargs']['room_name']
+        self.timer_task = None
 
         if not self.room_name or len(self.room_name) > 64:
             await self.close()
@@ -181,11 +253,23 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
                     "user": str(user) if user and not user.is_anonymous else "anon"
                 }
             )
+
+            if not self.timer_task:
+                self.timer_task = asyncio.create_task(self._game_timer_loop())
+
         except Exception:
             logger.exception("Error during connect")
             await self.send_json({"type": "error", "detail": "server error during connect"})
 
     async def disconnect(self, close_code):
+        if self.timer_task:
+            self.timer_task.cancel()
+            try:
+                await self.timer_task
+            except asyncio.CancelledError:
+                pass
+            self.timer_task = None
+
         # 1. Usuń z grupy WebSocket
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
         logger.info("Client disconnected: room=%s", self.room_name)
@@ -299,6 +383,38 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
     async def player_joined(self, event): 
         await self.send_json({ "type": "player_joined", "user": event["user"] })
 
+    async def _game_timer_loop(self):
+        """
+        Działa w tle i co sekundę sprawdza, czy czas gracza minął.
+        """
+        while True:
+            try:
+                # Sprawdzamy co 1 sekundę
+                await asyncio.sleep(1)
+                
+                # Sprawdź w bazie czy nastąpił timeout
+                timeout_state = await check_game_timeout(self.room_name)
+                
+                if timeout_state:
+                    # Jeśli tak -> wyślij Game Over do wszystkich
+                    await self.channel_layer.group_send(
+                        self.group_name,
+                        {
+                            "type": "broadcast_game_over", 
+                            "state": timeout_state
+                        }
+                    )
+                    # Skoro gra się skończyła, przerywamy pętlę monitorowania
+                    break
+                    
+            except asyncio.CancelledError:
+                # Zadanie zostało anulowane przy disconnect
+                break
+            except Exception as e:
+                # Logujemy błąd, ale nie przerywamy pętli (żeby timer nie padł przez jeden błąd)
+                print(f"Timer loop error: {e}")
+                await asyncio.sleep(5) # Odczekaj chwilę przed retry
+
     async def _handle_resign(self, user):
         """Gracz się poddaje -> przeciwnik wygrywa."""
         # 1. Pobierz aktualny stan
@@ -384,26 +500,96 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
 
     # Helpery Sync/Async (bez zmian logiki gry)
     def _apply_move_sync(self, move_data: dict):
-        # ... (tutaj Twoja logika silnika szachowego z poprzedniego kodu)
         try:
             game, created = Game.objects.get_or_create(room_name=self.room_name)
             if created or not game.state:
                 game.state = EngineWrapper.get_initial_state()
 
-            valid, new_state, info = EngineWrapper.validate_and_apply(game.state, move_data)
+            current_state_dict = json.loads(game.state)
+            
+            # Sprawdź czy gra się już nie skończyła
+            if current_state_dict.get('game_over'):
+                return False, "Game is already over"
+            
+            turn = current_state_dict.get('turn', 'b') # 'b' to białe w Twoim silniku, 'c' czarne
+            moves_history = current_state_dict.get('moves', [])
+            
+            # --- LOGIKA CZASU ---
+            now = time.time()
+            last_time = current_state_dict.get('last_move_timestamp', now)
+            # Odejmujemy czas tylko jeśli to NIE jest pierwszy ruch w grze
+            # (można też odejmować zawsze, ale wtedy biały traci czas czekając na start)
+            if len(moves_history) > 0:
+                time_delta = now - last_time
+                
+                if turn == 'b': # Białe robiły ruch, więc im odejmujemy
+                    current_state_dict['white_time'] -= time_delta
+                else:
+                    current_state_dict['black_time'] -= time_delta
+
+            # Sprawdzenie przegranej na czas (Timeout)
+            w_time = current_state_dict['white_time']
+            b_time = current_state_dict['black_time']
+            
+            if w_time <= 0 or b_time <= 0:
+                # KONIEC GRY PRZEZ CZAS
+                current_state_dict['white_time'] = max(0, w_time)
+                current_state_dict['black_time'] = max(0, b_time)
+                current_state_dict['game_over'] = True
+                current_state_dict['reason'] = 'timeout'
+                # Jeśli czas skończył się białym (w_time <= 0), wygrywają czarne ('c')
+                current_state_dict['winner'] = 'c' if w_time <= 0 else 'b'
+                
+                # Zapisujemy i zwracamy info o końcu
+                game.state = json.dumps(current_state_dict)
+                game.save(update_fields=["state", "updated_at"])
+                
+                return True, {
+                    "type": "game_over", # Specjalny typ ruchu, frontend musi to obsłużyć lub po prostu odświeżyć stan
+                    "state": current_state_dict
+                }
+
+            # 2. Jeśli czas jest OK, aplikujemy ruch w silniku
+            # Musimy przekazać zaktualizowany o czasy stan do walidacji (choć EngineWrapper może nadpisać strukturę)
+            # Najlepiej wywołać walidację na JSON stringu, a potem do wyniku DOKLEIĆ czasy.
+            
+            # Serializujemy zaktualizowany czasowo stan, żeby EngineWrapper miał aktualne dane (choć on głównie patrzy na planszę)
+            temp_state_str = json.dumps(current_state_dict)
+
+            valid, new_state_str, info = EngineWrapper.validate_and_apply(temp_state_str, move_data)
+
             if not valid:
                 err = info.get("error") if isinstance(info, dict) else str(info)
                 return False, err or "illegal move"
+            
+            new_state_dict = json.loads(new_state_str)
+            
+            # Przenosimy obliczone czasy do nowego stanu
+            new_state_dict['white_time'] = current_state_dict['white_time']
+            new_state_dict['black_time'] = current_state_dict['black_time']
+            new_state_dict['last_move_timestamp'] = now # Aktualizujemy czas ostatniego ruchu na TERAZ
 
-            game.state = new_state
+            # Sprawdzenie mata/pata z silnika (EngineWrapper to ustawia, ale upewnijmy się)
+            if new_state_dict.get('checkmate'):
+                new_state_dict['game_over'] = True
+                new_state_dict['reason'] = 'checkmate'
+                new_state_dict['winner'] = 'c' if turn == 'b' else 'b' # Wygrał ten co zrobił ruch (zamatował)
+            elif new_state_dict.get('stalemate'):
+                new_state_dict['game_over'] = True
+                new_state_dict['reason'] = 'stalemate'
+                new_state_dict['winner'] = None
+
+            # Zapis do bazy
+            game.state = json.dumps(new_state_dict)
             game.save(update_fields=["state", "updated_at"])
 
             payload = {
                 "uci": info.get("uci", move_data),
                 "info": info,
-                "state": json.loads(new_state),
+                "state": new_state_dict, # Tu poleci pełny stan z czasami
             }
             return True, payload
+        
         except Exception as e:
             tb = traceback.format_exc()
             logger.exception("Exception in _apply_move_sync")
@@ -419,11 +605,21 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _get_game_players(self):
         try:
-            # Zakładamy, że pierwszy gracz (zazwyczaj host) to białe, drugi to czarne.
-            # Sortujemy po ID, żeby kolejność była zawsze ta sama.
-            room = Room.objects.get(name=self.room_name)
-            return [p.username for p in room.players.all().order_by('id')]
-        except Room.DoesNotExist:
+            # Pobieramy grę po nazwie pokoju (używamy self.room_name)
+            game = Game.objects.get(room_name=self.room_name)
+            
+            players = []
+            
+            if game.white_player:
+                players.append(game.white_player.username)
+
+            # 2. Dodaj Czarnego (Gość)
+            if game.black_player:
+                players.append(game.black_player.username)
+            
+            return players
+
+        except (Game.DoesNotExist, Room.DoesNotExist):
             return []
 
     @database_sync_to_async

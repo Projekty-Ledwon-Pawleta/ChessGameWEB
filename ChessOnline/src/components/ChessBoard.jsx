@@ -16,6 +16,13 @@ function prettySquareName(row, col) {
   return `${files[col]}${ranks[row]}`;
 }
 
+function formatTime(seconds) {
+  if (seconds === null || seconds === undefined) return "--:--";
+  const m = Math.floor(Math.max(0, seconds) / 60);
+  const s = Math.floor(Math.max(0, seconds) % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
 function sanForMove(cellValue, sr, sc, r, c, board) {
   const dest = prettySquareName(r, c);
   if (!cellValue) return dest;
@@ -123,6 +130,9 @@ export default function ChessBoard({
   
   const [incomingDrawOffer, setIncomingDrawOffer] = useState(null);
 
+  const [whiteTime, setWhiteTime] = useState(600);
+  const [blackTime, setBlackTime] = useState(600);
+
   const boardRef = useRef(null);
 
   const mySide = useMemo(() => {
@@ -141,6 +151,28 @@ export default function ChessBoard({
   const shouldConnect = useRef(true);
 
   useEffect(() => {
+    // Nie odliczamy jeśli gra się skończyła lub nie zaczęła (brak historii ruchów, opcjonalnie)
+    if (gameOverReason) return;
+    
+    // Ustawiamy interwał co 100ms lub 1s. 
+    // Uwaga: Dokładność setInterval w JS bywa różna, ale synchronizacja z serwerem przy ruchu to naprawi.
+    const interval = setInterval(() => {
+        // Zmniejszamy czas tylko temu, czyja jest tura
+        // Musimy też sprawdzić czy gra w ogóle ruszyła (history.length > 0) 
+        // - bo ustaliliśmy w backendzie, że czas płynie po 1. ruchu.
+        if (history.length > 0) {
+            if (turn === 'b') {
+                setWhiteTime(t => Math.max(0, t - 1));
+            } else if (turn === 'c') {
+                setBlackTime(t => Math.max(0, t - 1));
+            }
+        }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [turn, gameOverReason, history.length]);
+
+  useEffect(() => {
     try {
       wsClient.connect({ host: wsHost, room: defaultRoom });
     } catch (e) {
@@ -152,6 +184,9 @@ export default function ChessBoard({
       if (s.board) setBoard(s.board);
       if (s.turn) setTurn(s.turn);
       
+      if (typeof s.white_time === 'number') setWhiteTime(s.white_time);
+      if (typeof s.black_time === 'number') setBlackTime(s.black_time);
+
       // Flagi stanu
       setIsCheck(Boolean(s.check));
 
@@ -401,6 +436,8 @@ export default function ChessBoard({
   }, [board, isCheck, turn]);
 
   function onSquareClick(r, c) {
+    if(players.length < 2) return;
+
     if (mySide && turn !== mySide) return;
 
     if (isCheckmate || isStalemate) return;
@@ -651,7 +688,7 @@ export default function ChessBoard({
             })
           )}
           
-          {/* OVERLAY Z WYNIKIEM (ZAKTUALIZOWANY) */}
+          {/* OVERLAY Z WYNIKIEM */}
           {(gameOverReason) && (
               <div style={{
                   position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
@@ -661,15 +698,14 @@ export default function ChessBoard({
               }}>
                   <h2 style={{fontSize: '2rem', marginBottom: 5}}>KONIEC GRY</h2>
                   
-                  {/* Powód końca gry */}
                   <div style={{fontSize: '1.2rem', marginBottom: 10, fontStyle: 'italic', color: '#ddd'}}>
                       {gameOverReason === 'checkmate' && "Szach-mat"}
                       {gameOverReason === 'stalemate' && "Pat"}
                       {gameOverReason === 'resignation' && "Poddanie się"}
                       {gameOverReason === 'agreement' && "Remis za porozumieniem"}
+                      {gameOverReason === 'timeout' && "Koniec czasu"}
                   </div>
 
-                  {/* Kto wygrał */}
                   <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: winner ? '#ff4d4f' : '#faad14'}}>
                       {winner === 'b' ? 'WYGRAŁY BIAŁE' : winner === 'c' ? 'WYGRAŁY CZARNE' : 'REMIS'}
                   </div>
@@ -699,11 +735,36 @@ export default function ChessBoard({
       <div className="game-sidebar" style={{ width: 260, background: '#f8f9fa', padding: 15, borderRadius: 8, border: '1px solid #ddd', height: 'fit-content' }}>
           <h3 style={{marginTop: 0, borderBottom: '1px solid #ccc', paddingBottom: 5}}>Gracze</h3>
           
-          <div style={{ padding: 5, fontWeight: turn === 'b' ? 'bold' : 'normal', color: turn === 'b' ? '#2e7d32' : '#000' }}>
-            ⚪ {players[0] || "Oczekiwanie..."} (Białe)
+          {/* GRACZ BIAŁY + TIMER */}
+          <div style={{ 
+              padding: 5, 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              fontWeight: turn === 'b' ? 'bold' : 'normal', 
+              color: turn === 'b' ? '#2e7d32' : '#000' 
+          }}>
+            <span>⚪ {players[0] || "Oczekiwanie..."} (Białe)</span>
+            {/* Wyświetlanie czasu dla białych */}
+            <span style={{ fontFamily: 'monospace', fontSize: '1.1rem', background: '#e0e0e0', padding: '2px 6px', borderRadius: 4, minWidth: '50px', textAlign: 'center', color: '#000' }}>
+                {formatTime(whiteTime)}
+            </span>
           </div>
-          <div style={{ padding: 5, fontWeight: turn === 'c' ? 'bold' : 'normal', color: turn === 'c' ? '#2e7d32' : '#000' }}>
-            ⚫ {players[1] || "Oczekiwanie..."} (Czarne)
+
+          {/* GRACZ CZARNY + TIMER */}
+          <div style={{ 
+              padding: 5, 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              fontWeight: turn === 'c' ? 'bold' : 'normal', 
+              color: turn === 'c' ? '#2e7d32' : '#000' 
+          }}>
+            <span>⚫ {players[1] || "Oczekiwanie..."} (Czarne)</span>
+            {/* Wyświetlanie czasu dla czarnych */}
+            <span style={{ fontFamily: 'monospace', fontSize: '1.1rem', background: '#e0e0e0', padding: '2px 6px', borderRadius: 4, minWidth: '50px', textAlign: 'center', color: '#000' }}>
+                {formatTime(blackTime)}
+            </span>
           </div>
 
           <div style={{ marginTop: 15 }}>
@@ -712,7 +773,7 @@ export default function ChessBoard({
             {isCheck && !gameOverReason && <div style={{color: 'crimson', fontWeight:'bold', marginTop: 4}}>SZACH!</div>}
           </div>
 
-          {/* PRZYCISKI AKCJI (widoczne tylko dla graczy, gdy gra trwa) */}
+          {/* PRZYCISKI AKCJI */}
           {mySide && !gameOverReason && (
               <div style={{ marginTop: 20, display: 'flex', gap: 10, flexDirection: 'column' }}>
                   <button 

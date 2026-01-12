@@ -1,6 +1,7 @@
 # games/engine_adapter.py
 import json
 import re
+import time
 from typing import Tuple, Dict, Any, List
 
 from myapp.chess_engine.Engine import Board
@@ -36,7 +37,13 @@ class EngineWrapper:
             "stalemate": mgr.is_stalemate(),
             "turn": mgr.get_game_turn(),
             "castling": mgr.get_board_castling_rules(),
-            "check": mgr.if_check('b')
+            "check": mgr.if_check('b'),
+            "white_time": 60.0,    # 10 minut w sekundach
+            "black_time": 60.0,
+            "last_move_timestamp": time.time(), # Czas ostatniej akcji
+            "game_over": False,     # Przyda się do flagowania końca
+            "winner": None,
+            "reason": None
         }
 
     @staticmethod
