@@ -10,9 +10,11 @@ from channels.generic.websocket import AsyncWebsocketConsumer, AsyncJsonWebsocke
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth import get_user_model
-from .models import Game, Room
+from .models import Game, GameHistory, Room
 from .engine_adapter import EngineWrapper
 from django.db.models import Count
+from myapp.models import PlayerProfile
+from myapp.elo_service import update_ratings
 
 User = get_user_model()
 
@@ -140,6 +142,72 @@ def remove_player_from_room_db(room_name, user_id):
     except (Room.DoesNotExist, User.DoesNotExist):
         return None
 
+def process_game_result_sync(room_name, winner_color, reason):
+    """
+    Synchroniczna wersja aktualizacji ELO, używana wewnątrz _apply_move_sync
+    winner_color: 'b', 'c', lub None
+    """
+    try:
+        game = Game.objects.get(room_name=room_name)
+        white_player = game.white_player
+        black_player = game.black_player
+
+        if not white_player or not black_player:
+            return
+
+        # Używamy related_name='profile' zdefiniowanego w modelu
+        p_white = white_player.profile 
+        p_black = black_player.profile
+
+        old_w_elo = p_white.elo
+        old_b_elo = p_black.elo
+
+        winner_user = None
+
+        is_draw = (winner_color is None)
+
+        if is_draw:
+            new_w, new_b = update_ratings(p_white.elo, p_black.elo, is_draw=True)
+            p_white.draws += 1
+            p_black.draws += 1
+            winner_user = None
+        elif winner_color == 'b':
+            new_w, new_b = update_ratings(p_white.elo, p_black.elo, is_draw=False)
+            p_white.wins += 1
+            p_black.losses += 1
+            winner_user = white_player
+        else: # winner == 'c'
+            new_b, new_w = update_ratings(p_black.elo, p_white.elo, is_draw=False)
+            p_black.wins += 1
+            p_white.losses += 1
+            winner_user = black_player
+
+        p_white.elo = new_w
+        p_black.elo = new_b
+        
+        p_white.save()
+        p_black.save()
+
+        state_dict = json.loads(game.state) if game.state else {}
+        move_list = state_dict.get('moves', [])
+
+        GameHistory.objects.create(
+            white_player=white_player,
+            black_player=black_player,
+            winner=winner_user,
+            white_elo=old_w_elo,
+            black_elo=old_b_elo,
+            reason=reason,
+            moves=move_list
+        )
+        
+    except Exception as e:
+        print(f"Błąd aktualizacji ELO: {e}")
+
+@database_sync_to_async
+def process_game_result(room_name, winner_color, reason):
+    return process_game_result_sync(room_name, winner_color, reason)
+
 def _serialize_room(room):
     return {
         'name': room.name,
@@ -199,6 +267,8 @@ def check_game_timeout(room_name):
         if timeout_occurred:
             state["game_over"] = True
             state["reason"] = "timeout"
+            winner_col = state["winner"]
+            process_game_result_sync(room_name, winner_col, 'timeout')
             # Zapisujemy zmianę w bazie
             game.state = json.dumps(state)
             game.save(update_fields=["state", "updated_at"])
@@ -438,20 +508,23 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             elif user.id == players[1].id:
                 winner_color = 'b' # Czarny się poddał -> biały wygrywa
 
-        # 3. Aktualizuj stan JSON
-        state_dict['game_over'] = True
-        state_dict['winner'] = winner_color
-        state_dict['reason'] = 'resignation' # powód końca gry
-        
-        # Zapisz w DB
-        game.state = json.dumps(state_dict)
-        await database_sync_to_async(game.save)()
+        if winner_color:
+            state_dict['game_over'] = True
+            state_dict['winner'] = winner_color
+            state_dict['reason'] = 'resignation'
+            
+            # Zapisz stan
+            game.state = json.dumps(state_dict)
+            await database_sync_to_async(game.save)()
 
-        # 4. Broadcast stanu
-        await self.channel_layer.group_send(
-            self.group_name,
-            {"type": "broadcast_game_over", "state": state_dict}
-        )
+            # Aktualizuj ELO
+            await process_game_result(self.room_name, winner_color, 'resignation')
+
+            # Broadcast
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "broadcast_game_over", "state": state_dict}
+            )
 
     async def _handle_draw_agreed(self):
         """Gracze zgodzili się na remis."""
@@ -468,6 +541,8 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
 
         game.state = json.dumps(state_dict)
         await database_sync_to_async(game.save)()
+
+        await process_game_result(self.room_name, None, 'agreement')
 
         await self.channel_layer.group_send(
             self.group_name,
@@ -573,11 +648,16 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             if new_state_dict.get('checkmate'):
                 new_state_dict['game_over'] = True
                 new_state_dict['reason'] = 'checkmate'
-                new_state_dict['winner'] = 'c' if turn == 'b' else 'b' # Wygrał ten co zrobił ruch (zamatował)
+                winner = turn
+                new_state_dict['winner'] = winner
+                
+                process_game_result_sync(self.room_name, winner, 'checkmate') # Wywołanie sync
+
             elif new_state_dict.get('stalemate'):
                 new_state_dict['game_over'] = True
                 new_state_dict['reason'] = 'stalemate'
                 new_state_dict['winner'] = None
+                process_game_result_sync(self.room_name, None, 'stalemate')
 
             # Zapis do bazy
             game.state = json.dumps(new_state_dict)

@@ -4,9 +4,12 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
+from rest_framework.generics import RetrieveAPIView
 
-from .models import Room
+from .models import GameHistory, Room
 from .serializers import (
+    GameHistoryDetailSerializer,
+    GameHistorySerializer,
     RoomCreateSerializer,
     RoomJoinSerializer,
     RoomSerializer,
@@ -70,3 +73,10 @@ class RoomJoinAPIView(GenericAPIView):
         room.players.add(request.user)
 
         return Response(RoomSerializer(room).data)
+
+class GameHistoryDetailView(RetrieveAPIView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class = GameHistorySerializer
+    queryset = GameHistory.objects.all()
+    lookup_field = 'id'
+    serializer_class = GameHistoryDetailSerializer

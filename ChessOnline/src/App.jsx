@@ -6,8 +6,10 @@ import LoginPage from "./components/LoginPage";
 import RegisterPage from "./components/RegisterPage";
 import RoomsPage from "./components/RoomsPage";
 import GamePage from "./components/GamePage";
+import ReplayPage from "./components/ReplayPage";
 
 import './index.css';
+import ProfilePage from "./components/ProfilePage";
 
 export default function App() {
   return (
@@ -23,6 +25,8 @@ export default function App() {
               {/* strona z planszą */}
               <Route path="/rooms" element={<RoomsPage/>} />
               <Route path="/play/:room?" element={<GamePage/>} />
+              <Route path="/profile" element={<ProfilePage/>} />
+              <Route path="/replay/:id" element={<ReplayPage />} />
 
               {/* fallback */}
               <Route path="*" element={<h2>404 — nie znaleziono</h2>} />

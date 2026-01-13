@@ -176,6 +176,11 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=90)
 }
 
+REST_AUTH = {
+    'USE_JWT': True,
+    'USER_DETAILS_SERIALIZER': 'myapp.serializers.UserSerializer',
+}
+
 SWAGGER_SETTINGS = {
     "SECURITY_DEFINITIONS":{
         "Bearer" : {"type":"apiKey", "name": "Authorization", "in": "header"}
