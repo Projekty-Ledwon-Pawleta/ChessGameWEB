@@ -9,6 +9,14 @@ export default function ProfilePage() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
 
+    const [isEditing, setIsEditing] = useState(false);
+    const [formData, setFormData] = useState({
+        username: '',
+        first_name: '',
+        last_name: ''
+    });
+    const [saveError, setSaveError] = useState(null);
+
     // Mock danych statystycznych (do zastąpienia danymi z API w przyszłości)
     const [stats, setStats] = useState({
         elo: 1200,
@@ -41,9 +49,13 @@ export default function ProfilePage() {
                 if (!res.ok) throw new Error("Auth failed");
                 const userData = await res.json();
                 setUser(userData);
+                
+                setFormData({
+                    username: userData.username || '',
+                    first_name: userData.first_name || '',
+                    last_name: userData.last_name || ''
+                });
 
-                // Tu w przyszłości: const statsRes = await fetch(...)
-                // Na razie ustawiamy przykładowe dane:
                 if (userData.stats) {
                     setStats({
                         elo: userData.elo || 1200,
@@ -81,12 +93,70 @@ export default function ProfilePage() {
         navigate('/');
     };
 
+    const handleInputChange = (e) => {
+        setFormData({
+            ...formData,
+            [e.target.name]: e.target.value
+        });
+    };
+
+    const handleSave = async () => {
+        setSaveError(null);
+        const token = localStorage.getItem('access_token');
+        
+        try {
+            const res = await fetch("http://localhost:8000/auth/user/", {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                },
+                body: JSON.stringify(formData)
+            });
+
+            if (!res.ok) {
+                const errData = await res.json();
+                // Prosta obsługa błędów (można rozbudować)
+                throw new Error(JSON.stringify(errData));
+            }
+
+            const updatedUser = await res.json();
+            
+            setUser(prev => ({
+                ...prev,
+                username: updatedUser.username,
+                first_name: updatedUser.first_name,
+                last_name: updatedUser.last_name
+            }));
+            
+            if (updatedUser.username) {
+                localStorage.setItem("username", updatedUser.username);
+            }
+
+            setIsEditing(false);
+        } catch (err) {
+            console.error("Błąd zapisu:", err);
+            setSaveError("Nie udało się zapisać zmian. Sprawdź czy nazwa użytkownika nie jest zajęta.");
+        }
+    };
+
+    const handleCancel = () => {
+        // Resetujemy formularz do aktualnych danych użytkownika
+        setFormData({
+            username: user.username || '',
+            first_name: user.first_name || '',
+            last_name: user.last_name || ''
+        });
+        setIsEditing(false);
+        setSaveError(null);
+    };
+
     if (loading) return <div className="container" style={{padding: 20}}>Ładowanie profilu...</div>;
     if (!user) return null;
 
     // Pobranie inicjału do avatara
     const initial = user.username ? user.username[0].toUpperCase() : '?';
-    const joinDate = new Date().toLocaleDateString(); // Tu można użyć user.date_joined z Django jeśli API to zwraca
+    const joinDate = user.date_joined || '-';
 
     return (
         <div className="site">
@@ -114,17 +184,71 @@ export default function ProfilePage() {
                     {/* Karta Główna */}
                     <div className="profile-card">
                         <div className="profile-avatar">{initial}</div>
-                        <div className="profile-info">
-                            <h2>{user.username}</h2>
-                            <span className="email">{user.email}</span>
-                            <div className="profile-meta">
-                                <span>Dołączył: {joinDate}</span>
-                                <span>•</span>
-                                <span>ID: #{user.id}</span>
-                            </div>
+                        
+                        <div className="profile-info" style={{flex: 1}}>
+                            {isEditing ? (
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 300}}>
+                                    <label style={{fontSize: 12, color: '#666'}}>Nazwa użytkownika</label>
+                                    <input 
+                                        name="username" 
+                                        value={formData.username} 
+                                        onChange={handleInputChange} 
+                                        className="profile-input" // Dodaj styl w CSS lub inline
+                                        style={{padding: 8, borderRadius: 6, border: '1px solid #ddd'}}
+                                    />
+                                    
+                                    <div style={{display: 'flex', gap: 10}}>
+                                        <div style={{flex: 1}}>
+                                            <label style={{fontSize: 12, color: '#666'}}>Imię</label>
+                                            <input 
+                                                name="first_name" 
+                                                value={formData.first_name} 
+                                                onChange={handleInputChange}
+                                                style={{padding: 8, borderRadius: 6, border: '1px solid #ddd', width: '100%', boxSizing: 'border-box'}}
+                                            />
+                                        </div>
+                                        <div style={{flex: 1}}>
+                                            <label style={{fontSize: 12, color: '#666'}}>Nazwisko</label>
+                                            <input 
+                                                name="last_name" 
+                                                value={formData.last_name} 
+                                                onChange={handleInputChange}
+                                                style={{padding: 8, borderRadius: 6, border: '1px solid #ddd', width: '100%', boxSizing: 'border-box'}}
+                                            />
+                                        </div>
+                                    </div>
+                                    {saveError && <div style={{color: 'red', fontSize: 12}}>{saveError}</div>}
+                                </div>
+                            ) : (
+                                <>
+                                    <h2>
+                                        {user.first_name} {user.last_name} 
+                                        {(!user.first_name && !user.last_name) && user.username}
+                                    </h2>
+                                    {/* Jeśli są imiona, pokaż username jako dodatek */}
+                                    {(user.first_name || user.last_name) && (
+                                        <div style={{color: '#6b7280', marginBottom: 4}}>@{user.username}</div>
+                                    )}
+                                    
+                                    <span className="email">{user.email}</span>
+                                    <div className="profile-meta">
+                                        <span>Dołączył: {joinDate}</span>
+                                        <span>•</span>
+                                        <span>ID: #{user.id}</span>
+                                    </div>
+                                </>
+                            )}
                         </div>
-                        <div style={{marginLeft: 'auto'}}>
-                            <button className="btn" disabled>Edytuj profil</button>
+
+                        <div style={{marginLeft: 'auto', display: 'flex', flexDirection: 'column', gap: 8}}>
+                            {isEditing ? (
+                                <>
+                                    <button className="btn btn--primary" onClick={handleSave}>Zapisz</button>
+                                    <button className="btn" onClick={handleCancel}>Anuluj</button>
+                                </>
+                            ) : (
+                                <button className="btn" onClick={() => setIsEditing(true)}>Edytuj profil</button>
+                            )}
                         </div>
                     </div>
 
