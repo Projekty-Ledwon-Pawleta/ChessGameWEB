@@ -34,6 +34,8 @@ export default function RoomsPage({ wsHost }) {
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomPass, setNewRoomPass] = useState("");
 
+  const [searchTerm, setSearchTerm] = useState("");
+
   useEffect(() => {
     // Connect to lobby on mount
     try {
@@ -144,7 +146,11 @@ export default function RoomsPage({ wsHost }) {
     // actual navigation happens on server 'joined' message
   }
 
-  return (
+  const filteredRooms = rooms.filter(r => 
+    r.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+ return (
     <div className="container p-4">
       <div className="lobby-header">
         <h2>Lobby pokoi</h2>
@@ -161,12 +167,34 @@ export default function RoomsPage({ wsHost }) {
       </section>
 
       <section className="rooms-list p-2" style={{marginTop:16}}>
-        <h3>Dostępne pokoje</h3>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12}}>
+            <h3>Dostępne pokoje</h3>
+            {/* WYSZUKIWARKA */}
+            <input 
+                placeholder="Szukaj pokoju..." 
+                value={searchTerm} 
+                onChange={e => setSearchTerm(e.target.value)}
+                style={{
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #e6eef2',
+                    fontSize: '14px',
+                    width: '200px'
+                }}
+            />
+        </div>
+
         {loading ? <div>Ładowanie listy pokoi…</div> : null}
         {error && <div style={{color:'crimson'}}>{error}</div>}
-        {rooms.length === 0 && !loading ? <div>Brak dostępnych pokoi. Stwórz nowy!</div> : null}
+        
+        {!loading && filteredRooms.length === 0 && (
+            <div style={{color: '#666', fontStyle: 'italic'}}>
+                {searchTerm ? "Nie znaleziono pokoju o tej nazwie." : "Brak dostępnych pokoi. Stwórz nowy!"}
+            </div>
+        )}
+
         <div className="rooms-grid">
-          {rooms.map(r => (
+          {filteredRooms.map(r => (
             <RoomListItem key={r.name} room={r} onJoin={handleJoin} />
           ))}
         </div>

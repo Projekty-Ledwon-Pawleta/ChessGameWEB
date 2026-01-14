@@ -7,6 +7,7 @@ import RegisterPage from "./components/RegisterPage";
 import RoomsPage from "./components/RoomsPage";
 import GamePage from "./components/GamePage";
 import ReplayPage from "./components/ReplayPage";
+import RulesPage from './components/RulesPage';
 
 import './index.css';
 import ProfilePage from "./components/ProfilePage";
@@ -27,7 +28,7 @@ export default function App() {
               <Route path="/play/:room?" element={<GamePage/>} />
               <Route path="/profile" element={<ProfilePage/>} />
               <Route path="/replay/:id" element={<ReplayPage />} />
-
+              <Route path="/rules" element={<RulesPage />} />
               {/* fallback */}
               <Route path="*" element={<h2>404 — nie znaleziono</h2>} />
             </Routes>

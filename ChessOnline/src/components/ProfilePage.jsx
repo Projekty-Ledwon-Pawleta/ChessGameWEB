@@ -266,6 +266,10 @@ export default function ProfilePage() {
                             <span className="stat-value">{stats.wins}</span>
                             <span className="stat-label">Wygrane</span>
                         </div>
+                        <div className="stat-card draw">
+                            <span className="stat-value">{stats.draws}</span>
+                            <span className="stat-label">Remisy</span>
+                        </div>
                         <div className="stat-card loss">
                             <span className="stat-value">{stats.losses}</span>
                             <span className="stat-label">Przegrane</span>

@@ -1,0 +1,99 @@
+/* src/styles/rules.css */
+
+.rules-layout {
+    max-width: 800px;
+    margin: 0 auto;
+    padding-bottom: 40px;
+}
+
+.rules-section {
+    background: white;
+    border: 1px solid #eef2f4;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 6px 20px rgba(16, 24, 40, 0.03);
+}
+
+.rules-section h2 {
+    margin-top: 0;
+    margin-bottom: 16px;
+    color: #111827;
+    font-size: 1.5rem;
+    border-bottom: 2px solid #f3f4f6;
+    padding-bottom: 10px;
+}
+
+.rules-section h3 {
+    margin-top: 20px;
+    margin-bottom: 10px;
+    color: #374151;
+    font-size: 1.1rem;
+}
+
+.rules-text {
+    line-height: 1.6;
+    color: #4b5563;
+    margin-bottom: 12px;
+}
+
+/* Lista figur */
+.pieces-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.piece-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #f9fafb;
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+}
+
+.piece-icon {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #eef2f4; /* Lekkie tło pod figurę */
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.piece-icon img {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+}
+
+.piece-desc h4 {
+    margin: 0 0 4px 0;
+    color: #111827;
+    font-size: 1rem;
+}
+
+.piece-desc p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #6b7280;
+    line-height: 1.4;
+}
+
+/* Ruchy specjalne */
+.special-move {
+    background: #fffbeb; /* Lekki żółty/kremowy */
+    border: 1px solid #fcd34d;
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.special-move h4 {
+    margin-top: 0;
+    color: #92400e;
+}
