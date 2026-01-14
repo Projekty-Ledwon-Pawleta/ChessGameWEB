@@ -133,6 +133,10 @@ export default function ChessBoard({
   const [whiteTime, setWhiteTime] = useState(600);
   const [blackTime, setBlackTime] = useState(600);
 
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef(null);
+
   const boardRef = useRef(null);
 
   const mySide = useMemo(() => {
@@ -147,6 +151,10 @@ export default function ChessBoard({
     if (mySide === 'c') setOrientation('c');
     else setOrientation('b');
   }, [mySide]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   const shouldConnect = useRef(true);
 
@@ -270,6 +278,15 @@ export default function ChessBoard({
         }
     });
 
+    const unsubChat = wsClient.on('chat', (msg) => {
+        // msg = { type: 'chat', message: 'treść', sender: 'User1' }
+        setChatMessages(prev => [...prev, { 
+            sender: msg.sender, 
+            text: msg.message,
+            isMe: msg.sender === username
+        }]);
+    });
+
     // 1. ODBIÓR STANU PRZY POŁĄCZENIU
     const unsubConnected = wsClient.on('connected', (msg) => {
       console.log("Connected msg:", msg);
@@ -321,9 +338,17 @@ export default function ChessBoard({
       unsubGameOver();
       unsubDrawOffer();
       unsubDrawRejected();
+      unsubChat();
       try { wsClient.disconnect(); } catch (e) { /* ignore */ }
     };
   }, []);
+
+  const handleSendChat = (e) => {
+      e.preventDefault();
+      if (!chatInput.trim()) return;
+      wsClient.send({ type: 'chat', message: chatInput });
+      setChatInput("");
+  };
 
   const handleResign = () => {
       if (!confirm("Czy na pewno chcesz się poddać?")) return;
@@ -807,12 +832,77 @@ export default function ChessBoard({
           <h4 style={{marginBottom: 5, marginTop: 15}}>Historia</h4>
           <div className="history-list" style={{ height: 200, overflowY: 'auto', background: '#fff', border: '1px solid #eee', padding: 5, fontFamily: 'monospace', fontSize: '0.9rem' }}>
               {history.length === 0 ? <div style={{color: '#999'}}>Brak ruchów</div> : null}
-              {history.map((m, i) => (
-                  <span key={i} style={{ display: 'inline-block', marginRight: 8 }}>
-                      {i % 2 === 0 ? <span style={{color: '#888'}}>{(i/2)+1}.</span> : null} {m}
-                  </span>
-              ))}
+              
+              {/* Tworzymy tablicę par ruchów na podstawie długości historii */}
+              {Array.from({ length: Math.ceil(history.length / 2) }).map((_, i) => {
+                  const whiteMove = history[i * 2];     // Ruch białego (parzyste indeksy: 0, 2, 4...)
+                  const blackMove = history[i * 2 + 1]; // Ruch czarnego (nieparzyste: 1, 3, 5...)
+                  
+                  return (
+                      <div key={i} style={{ display: 'flex', padding: '2px 0', borderBottom: '1px dotted #eee' }}>
+                          {/* Numer tury */}
+                          <span style={{ width: '30px', color: '#888', userSelect: 'none', textAlign: 'right', marginRight: '10px' }}>
+                              {i + 1}.
+                          </span>
+                          
+                          {/* Ruch białych */}
+                          <span style={{ flex: 1, fontWeight: 'bold', color: '#000' }}>
+                              {whiteMove}
+                          </span>
+                          
+                          {/* Ruch czarnych (jeśli istnieje) */}
+                          <span style={{ flex: 1, color: '#000' }}>
+                              {blackMove || ''}
+                          </span>
+                      </div>
+                  );
+              })}
+              
               <div ref={el => el && el.scrollIntoView({ behavior: 'smooth' })} />
+          </div>
+
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #ddd', display: 'flex', flexDirection: 'column', height: 200, overflow: 'hidden' }}>
+              {/* Nagłówek czatu */}
+              <div style={{ padding: '8px', background: '#f1f3f5', borderBottom: '1px solid #eee', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                  Czat
+              </div>
+              
+              {/* Lista wiadomości */}
+              <div style={{ flex: 1, padding: '10px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {chatMessages.map((msg, idx) => (
+                      <div key={idx} style={{ 
+                          fontSize: '0.85rem', 
+                          alignSelf: msg.isMe ? 'flex-end' : 'flex-start',
+                          maxWidth: '85%',
+                          wordBreak: 'break-word',
+                          background: msg.system ? 'transparent' : (msg.isMe ? '#dcfce7' : '#f3f4f6'),
+                          padding: msg.system ? '0' : '6px 10px',
+                          borderRadius: '12px',
+                          color: msg.system ? '#888' : 'inherit',
+                          fontStyle: msg.system ? 'italic' : 'normal',
+                          textAlign: msg.system ? 'center' : 'left',
+                          width: msg.system ? '100%' : 'auto'
+                      }}>
+                          {!msg.system && !msg.isMe && <div style={{fontSize: '0.7rem', color: '#666', marginBottom: 2}}>{msg.sender}</div>}
+                          {msg.text}
+                      </div>
+                  ))}
+                  <div ref={chatEndRef} />
+              </div>
+
+              {/* Input */}
+              <form onSubmit={handleSendChat} style={{ display: 'flex', padding: '8px', borderTop: '1px solid #eee' }}>
+                  <input 
+                      type="text" 
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Wiadomość..."
+                      style={{ flex: 1, padding: '6px 10px', borderRadius: '20px', border: '1px solid #ddd', outline: 'none', fontSize: '0.9rem' }}
+                  />
+                  <button type="submit" style={{ marginLeft: 8, background: '#2f7a46', color: '#fff', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      ➤
+                  </button>
+              </form>
           </div>
       </div>
 
