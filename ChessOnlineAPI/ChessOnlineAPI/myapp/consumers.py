@@ -32,6 +32,17 @@ if not logger.handlers:
     logger.addHandler(fh)
     logger.addHandler(sh)
 
+
+def _get_player_summary(user):
+    """Pomocnik do pobierania nazwy i ELO gracza"""
+    elo = 1200
+    if hasattr(user, 'profile'):
+        elo = user.profile.elo
+    return {
+        'username': user.username,
+        'elo': elo
+    }
+
 # --- DB HELPERS ---
 
 @database_sync_to_async
@@ -52,12 +63,13 @@ def get_all_rooms_serialized():
     return [
         {
             'name': r.name,
-            'players': [u.username if hasattr(u, 'username') else str(u.id) for u in r.players.all()],
+            'players': [_get_player_summary(u) for u in r.players.all()],
             'players_count': r.players_count,
             'has_password': bool(r.password_hash),
             'status': r.status,
         } for r in qs
     ]
+
 
 @database_sync_to_async
 def create_room_db(name, host_id, password):
@@ -76,13 +88,7 @@ def create_room_db(name, host_id, password):
         state=EngineWrapper.get_initial_state(),
         white_player=host)
 
-    return {
-        'name': room.name,
-        'players': [host.username or str(host.id)],
-        'players_count': room.players_count,
-        'has_password': bool(room.password_hash),
-        'status': room.status,
-    }
+    return _serialize_room(room)
 
 @database_sync_to_async
 def try_join_room_db(name, user_id, password):
@@ -211,7 +217,7 @@ def process_game_result(room_name, winner_color, reason):
 def _serialize_room(room):
     return {
         'name': room.name,
-        'players': [p.username or str(p.id) for p in room.players.all()],
+        'players': [_get_player_summary(p) for p in room.players.all()],
         'players_count': room.players_count,
         'has_password': bool(room.password_hash),
         'status': room.status,

@@ -9,12 +9,28 @@ function RoomListItem({ room, onJoin }) {
     <div className="room-card">
       <div className="room-card__left">
         <div className="room-card__name">{room.name}</div>
-        <div className="room-card__meta">
-          {room.players_count ?? 0}/2 players
-          {room.has_password ? " • protected" : ""}
+        
+        <div className="room-card__players" style={{ fontSize: '0.9rem', marginTop: 4, color: '#4b5563' }}>
+            {room.players && room.players.length > 0 ? (
+                room.players.map((p, i) => (
+                    <span key={p.username}>
+                        {i > 0 && ", "}
+                        <span style={{fontWeight: 600}}>{p.username}</span> 
+                        <span style={{color: '#0f9d58', fontSize: '0.85em', marginLeft: 2}}>({p.elo})</span>
+                    </span>
+                ))
+            ) : (
+                <span style={{fontStyle: 'italic', color: '#9ca3af'}}>Pusty pokój</span>
+            )}
+        </div>
+
+        <div className="room-card__meta" style={{ marginTop: 4, fontSize: '0.8rem' }}>
+          {room.players_count ?? 0}/2 graczy
+          {room.has_password ? " • 🔒 Hasło" : ""}
           {room.status ? ` • ${room.status}` : ""}
         </div>
       </div>
+      
       <div className="room-card__actions">
         <button className="btn" onClick={() => onJoin(room)}>Dołącz</button>
       </div>
