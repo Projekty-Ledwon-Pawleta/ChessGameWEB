@@ -149,3 +149,23 @@ class UserSerializer(serializers.ModelSerializer):
         ).order_by('-date')[:10]
         
         return GameHistorySerializer(games, many=True, context=self.context).data
+    
+class LeaderboardSerializer(serializers.ModelSerializer):
+    elo = serializers.IntegerField(source='profile.elo', read_only=True)
+    stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['username', 'elo', 'stats']
+
+    def get_stats(self, obj):
+        if not hasattr(obj, 'profile'):
+            return {'wins': 0, 'losses': 0, 'draws': 0, 'gamesPlayed': 0}
+        
+        p = obj.profile
+        return {
+            'wins': p.wins,
+            'losses': p.losses,
+            'draws': p.draws,
+            'gamesPlayed': p.wins + p.losses + p.draws
+        }

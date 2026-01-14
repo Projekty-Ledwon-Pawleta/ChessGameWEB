@@ -4,7 +4,7 @@ from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
-from .views import GameHistoryDetailView, RoomListAPIView, RoomCreateAPIView, RoomJoinAPIView
+from .views import GameHistoryDetailView, LeaderboardView, RoomListAPIView, RoomCreateAPIView, RoomJoinAPIView
 
 
 urlpatterns = [
@@ -15,4 +15,5 @@ urlpatterns = [
     path('rooms/create/', RoomCreateAPIView.as_view(), name='rooms-create'),
     path('rooms/<str:name>/join/', RoomJoinAPIView.as_view(), name='rooms-join'),
     path('games/history/<int:id>/', GameHistoryDetailView.as_view(), name='game-history-detail'),
+    path('leaderboard/', LeaderboardView.as_view(), name='leaderboard'),
 ]

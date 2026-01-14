@@ -131,6 +131,7 @@ export default function HomePage() {
     <>
       <Link className="nav__link" to="/">Strona główna</Link>
       <Link className="nav__link" to="/rules">Zasady</Link>
+      <Link className="nav__link" to="/leaderboard">Ranking</Link>
       <Link className="nav__link" to="/profile">Profil</Link>
       <button className="btn btn--link nav__link" onClick={handleLogout}>Wyloguj</button>
       <Link className="btn btn--primary" to="/rooms">Wejdź do gry</Link>
@@ -141,6 +142,7 @@ export default function HomePage() {
     <>
       <Link className="nav__link" to="/">Strona główna</Link>
       <Link className="nav__link" to="/rules">Zasady</Link>
+      <Link className="nav__link" to="/leaderboard">Ranking</Link>
       <Link className="nav__link" to="/login">Zaloguj</Link>
       <Link className="nav__link" to="/register">Zarejestruj</Link>
     </>

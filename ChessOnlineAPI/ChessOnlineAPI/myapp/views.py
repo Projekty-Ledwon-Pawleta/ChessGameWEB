@@ -5,15 +5,19 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from rest_framework.generics import RetrieveAPIView
+from django.contrib.auth import get_user_model
 
 from .models import GameHistory, Room
 from .serializers import (
     GameHistoryDetailSerializer,
     GameHistorySerializer,
+    LeaderboardSerializer,
     RoomCreateSerializer,
     RoomJoinSerializer,
     RoomSerializer,
 )
+
+User = get_user_model()
 
 def home(request):
     return HttpResponse("Hello from my new app!")
@@ -80,3 +84,10 @@ class GameHistoryDetailView(RetrieveAPIView):
     queryset = GameHistory.objects.all()
     lookup_field = 'id'
     serializer_class = GameHistoryDetailSerializer
+
+class LeaderboardView(ListAPIView):
+    permission_classes = [AllowAny] 
+    serializer_class = LeaderboardSerializer
+
+    def get_queryset(self):
+        return User.objects.select_related('profile').order_by('-profile__elo')[:100] # Limit top 100

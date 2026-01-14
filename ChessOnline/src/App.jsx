@@ -11,6 +11,7 @@ import RulesPage from './components/RulesPage';
 
 import './index.css';
 import ProfilePage from "./components/ProfilePage";
+import LeaderboardPage from './components/LeaderboardPage';
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
               <Route path="/profile" element={<ProfilePage/>} />
               <Route path="/replay/:id" element={<ReplayPage />} />
               <Route path="/rules" element={<RulesPage />} />
+              <Route path="/leaderboard" element={<LeaderboardPage />} />
               {/* fallback */}
               <Route path="*" element={<h2>404 — nie znaleziono</h2>} />
             </Routes>

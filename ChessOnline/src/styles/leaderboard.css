@@ -1,0 +1,68 @@
+/* src/styles/leaderboard.css */
+
+.leaderboard-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 6px 20px rgba(16, 24, 40, 0.03);
+    border: 1px solid #eef2f4;
+}
+
+.leaderboard-table th,
+.leaderboard-table td {
+    padding: 16px;
+    text-align: left;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.leaderboard-table th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.leaderboard-table tr:last-child td {
+    border-bottom: none;
+}
+
+.rank-cell {
+    font-weight: bold;
+    color: #6b7280;
+    width: 50px;
+    text-align: center !important;
+}
+
+/* Wyróżnienie top 3 */
+.rank-1 { color: #d97706; font-size: 1.2rem; } /* Złoto */
+.rank-2 { color: #9ca3af; font-size: 1.1rem; } /* Srebro */
+.rank-3 { color: #b45309; font-size: 1.1rem; } /* Brąz */
+
+.player-cell {
+    font-weight: 600;
+    color: #111827;
+}
+
+.elo-cell {
+    font-weight: 700;
+    color: #0f9d58;
+}
+
+.stats-cell {
+    color: #6b7280;
+    font-size: 0.9rem;
+}
+
+.stat-win { color: #16a34a; font-weight: 600; }
+.stat-loss { color: #dc2626; font-weight: 600; }
+.stat-draw { color: #9ca3af; }
+
+@media (max-width: 600px) {
+    .hide-mobile {
+        display: none;
+    }
+}
