@@ -15,7 +15,7 @@ import LeaderboardPage from './components/LeaderboardPage';
 
 export default function App() {
   return (
-     <BrowserRouter>
+    <BrowserRouter basename="/ChessGameWEB">
       <div className="min-h-screen bg-gray-50 p-6">
         <div className="max-w-6xl mx-auto">
           <main className="py-6">
