@@ -14,7 +14,6 @@ if __name__ == '__main__':
         'ChessOnlineAPI.asgi:application'
     ]
 
-    # opcjonalnie: django.setup() przed daphne
     django.setup()
     from daphne.cli import CommandLineInterface
     CommandLineInterface.entrypoint()

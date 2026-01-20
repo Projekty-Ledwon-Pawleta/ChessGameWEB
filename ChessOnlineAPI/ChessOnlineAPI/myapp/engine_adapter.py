@@ -38,8 +38,8 @@ class EngineWrapper:
             "turn": mgr.get_game_turn(),
             "castling": mgr.get_board_castling_rules(),
             "check": mgr.if_check('b'),
-            "white_time": 60.0,    # 10 minut w sekundach
-            "black_time": 60.0,
+            "white_time": 600.0,    # 10 minut w sekundach
+            "black_time": 600.0,
             "last_move_timestamp": time.time(), # Czas ostatniej akcji
             "game_over": False,     # Przyda się do flagowania końca
             "winner": None,

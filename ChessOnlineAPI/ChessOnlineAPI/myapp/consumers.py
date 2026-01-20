@@ -650,24 +650,27 @@ class ChessGameConsumer(AsyncWebsocketConsumer):
             new_state_dict['black_time'] = current_state_dict['black_time']
             new_state_dict['last_move_timestamp'] = now # Aktualizujemy czas ostatniego ruchu na TERAZ
 
+            is_checkmate = new_state_dict.get('checkmate')
+            is_stalemate = new_state_dict.get('stalemate')
+
             # Sprawdzenie mata/pata z silnika (EngineWrapper to ustawia, ale upewnijmy się)
-            if new_state_dict.get('checkmate'):
+            if is_checkmate:
                 new_state_dict['game_over'] = True
                 new_state_dict['reason'] = 'checkmate'
-                winner = turn
-                new_state_dict['winner'] = winner
-                
-                process_game_result_sync(self.room_name, winner, 'checkmate') # Wywołanie sync
-
-            elif new_state_dict.get('stalemate'):
+                new_state_dict['winner'] = turn 
+            elif is_stalemate:
                 new_state_dict['game_over'] = True
                 new_state_dict['reason'] = 'stalemate'
                 new_state_dict['winner'] = None
-                process_game_result_sync(self.room_name, None, 'stalemate')
 
             # Zapis do bazy
             game.state = json.dumps(new_state_dict)
             game.save(update_fields=["state", "updated_at"])
+
+            if is_checkmate:
+                process_game_result_sync(self.room_name, turn, 'checkmate')
+            elif is_stalemate:
+                process_game_result_sync(self.room_name, None, 'stalemate')
 
             payload = {
                 "uci": info.get("uci", move_data),
